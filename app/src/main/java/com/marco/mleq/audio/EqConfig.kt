@@ -122,8 +122,8 @@ data class EqConfig(
     /** Solo il contributo delle manopole Bassi/Alti (il Tono è separato dall'equalizzatore). */
     fun toneResponseDb(f: Double, fs: Double = 48000.0): Double {
         var t = 0.0
-        if (bassPercent != 0) t += EqMath.magnitudeDb(EqMath.lowShelf(fs, bassFreq.toDouble(), EqMath.toneDb(bassPercent)), fs, f)
-        if (treblePercent != 0) t += EqMath.magnitudeDb(EqMath.highShelf(fs, trebleFreq.toDouble(), EqMath.toneDb(treblePercent)), fs, f)
+        if (bassPercent != 0) for (c in EqMath.bassStages(this, fs)) t += EqMath.magnitudeDb(c, fs, f)
+        if (treblePercent != 0) for (c in EqMath.trebleStages(this, fs)) t += EqMath.magnitudeDb(c, fs, f)
         return t
     }
 
@@ -312,12 +312,16 @@ object EqMath {
         )
     }
 
-    fun lowShelf(fs: Double, f: Double, gainDb: Double): Coef {
+    /**
+     * [slope] = parametro S dell'Audio EQ Cookbook: 1 = pendenza massima senza sovraelongazione
+     * (valore storico), sotto 1 la transizione è più dolce e larga.
+     */
+    fun lowShelf(fs: Double, f: Double, gainDb: Double, slope: Double = 1.0): Coef {
         if (kotlin.math.abs(gainDb) < 0.01) return IDENTITY
         val a = 10.0.pow(gainDb / 40.0)
         val w0 = 2.0 * PI * f / fs
         val c = cos(w0)
-        val alpha = sin(w0) / 2.0 * sqrt(2.0)
+        val alpha = sin(w0) / 2.0 * sqrt((a + 1.0 / a) * (1.0 / slope - 1.0) + 2.0)
         val sa = 2.0 * sqrt(a) * alpha
         return norm(
             a * ((a + 1) - (a - 1) * c + sa),
@@ -329,12 +333,12 @@ object EqMath {
         )
     }
 
-    fun highShelf(fs: Double, f: Double, gainDb: Double): Coef {
+    fun highShelf(fs: Double, f: Double, gainDb: Double, slope: Double = 1.0): Coef {
         if (kotlin.math.abs(gainDb) < 0.01) return IDENTITY
         val a = 10.0.pow(gainDb / 40.0)
         val w0 = 2.0 * PI * f / fs
         val c = cos(w0)
-        val alpha = sin(w0) / 2.0 * sqrt(2.0)
+        val alpha = sin(w0) / 2.0 * sqrt((a + 1.0 / a) * (1.0 / slope - 1.0) + 2.0)
         val sa = 2.0 * sqrt(a) * alpha
         return norm(
             a * ((a + 1) + (a - 1) * c + sa),
@@ -351,16 +355,44 @@ object EqMath {
     fun toneDb(percent: Int): Double = percent.coerceIn(0, 100) / 10.0
 
     /**
-     * Elenco fisso di stadi: [bassi, banda 0..N-1, alti].
+     * Stadi delle manopole Bassi: [shelf morbida, "corpo" nei medio-bassi].
+     * Gli stadi neutri valgono IDENTITY. Vedi [ToneVoicing] per la voce scelta.
+     */
+    fun bassStages(cfg: EqConfig, fs: Double): List<Coef> {
+        val limit = fs * 0.45
+        val db = toneDb(cfg.bassPercent)
+        val f = cfg.bassFreq.toDouble()
+        val bodyF = ToneVoicing.bassBodyFreq(f)
+        return listOf(
+            if (f < limit) lowShelf(fs, f, db, ToneVoicing.BASS_SLOPE) else IDENTITY,
+            if (bodyF < limit) peaking(fs, bodyF, ToneVoicing.BASS_BODY_Q, db * ToneVoicing.BASS_BODY_RATIO) else IDENTITY,
+        )
+    }
+
+    /** Stadi delle manopole Alti: [pulizia dei medio-bassi, shelf netta, "aria"]. */
+    fun trebleStages(cfg: EqConfig, fs: Double): List<Coef> {
+        val limit = fs * 0.45
+        val db = toneDb(cfg.treblePercent)
+        val f = cfg.trebleFreq.toDouble()
+        val airF = ToneVoicing.trebleAirFreq(f)
+        return listOf(
+            peaking(fs, ToneVoicing.CLEAN_FREQ, ToneVoicing.CLEAN_Q, db * ToneVoicing.TREBLE_CLEAN_RATIO),
+            if (f < limit) highShelf(fs, f, db, ToneVoicing.TREBLE_SLOPE) else IDENTITY,
+            if (airF < limit) peaking(fs, airF, ToneVoicing.TREBLE_AIR_Q, db * ToneVoicing.TREBLE_AIR_RATIO) else IDENTITY,
+        )
+    }
+
+    /** Numero di stadi fissi: [bassi x2, banda 0..N-1, alti x3]. */
+    fun stageCount(bandCount: Int): Int = bandCount + 5
+
+    /**
+     * Elenco fisso di stadi: [bassi x2, banda 0..N-1, alti x3].
      * Gli stadi neutri valgono IDENTITY, così la struttura non cambia mentre si regola.
      */
     fun stages(cfg: EqConfig, fs: Double): List<Coef> {
         val nyquistLimit = fs * 0.45
-        val out = ArrayList<Coef>(cfg.bandCount + 2)
-        out.add(
-            if (cfg.bassFreq < nyquistLimit)
-                lowShelf(fs, cfg.bassFreq.toDouble(), toneDb(cfg.bassPercent)) else IDENTITY
-        )
+        val out = ArrayList<Coef>(stageCount(cfg.bandCount))
+        out.addAll(bassStages(cfg, fs))
         for (i in 0 until cfg.bandCount) {
             val f = cfg.freqs[i].toDouble()
             out.add(
@@ -372,10 +404,7 @@ object EqMath {
                     } else IDENTITY
             )
         }
-        out.add(
-            if (cfg.trebleFreq < nyquistLimit)
-                highShelf(fs, cfg.trebleFreq.toDouble(), toneDb(cfg.treblePercent)) else IDENTITY
-        )
+        out.addAll(trebleStages(cfg, fs))
         return out
     }
 
@@ -394,4 +423,34 @@ object EqMath {
         if (den <= 0.0 || num <= 0.0) return 0.0
         return 10.0 * log10(num / den)
     }
+}
+
+/**
+ * Voce delle manopole Bassi e Alti. Ogni manopola non è una semplice shelf: aggiunge piccoli
+ * stadi che ne cambiano il carattere. Tutti i valori sono qui, per poterli ritoccare all'orecchio.
+ *
+ * Bassi "caldi": shelf morbida (pendenza dolce, niente scalino) più una campana larga a 90-220 Hz
+ * che dà corpo, circa il 30% del guadagno della shelf.
+ *
+ * Alti "freddi": shelf netta, una campana d'"aria" sopra i 9 kHz (circa il 30% del guadagno) e un
+ * leggero taglio attorno ai 320 Hz (12% del guadagno, al massimo -1,2 dB) che toglie un po' di
+ * calore e rende il suono più pulito e brillante.
+ */
+object ToneVoicing {
+    const val BASS_SLOPE = 0.75
+    const val BASS_BODY_RATIO = 0.30
+    const val BASS_BODY_Q = 0.6
+
+    const val TREBLE_SLOPE = 1.0
+    const val TREBLE_AIR_RATIO = 0.30
+    const val TREBLE_AIR_Q = 0.8
+    const val TREBLE_CLEAN_RATIO = -0.12
+    const val CLEAN_FREQ = 320.0
+    const val CLEAN_Q = 0.7
+
+    /** Frequenza del "corpo": circa un'ottava sopra la shelf, tra 90 e 220 Hz. */
+    fun bassBodyFreq(bassFreq: Double): Double = (bassFreq * 2.0).coerceIn(90.0, 220.0)
+
+    /** Frequenza dell'"aria": circa 1,6 volte la shelf, tra 9 e 16 kHz. */
+    fun trebleAirFreq(trebleFreq: Double): Double = (trebleFreq * 1.6).coerceIn(9000.0, 16000.0)
 }

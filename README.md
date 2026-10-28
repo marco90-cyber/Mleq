@@ -7,7 +7,7 @@ Scegli uno o più file audio dal selettore di Android e ascoltali con la curva a
 ## Cosa contiene (da MLPod)
 
 - **Equalizzatore parametrico** da 3 a 32 bande (frequenza, guadagno e Q per ogni banda), tipo di filtro per banda (low shelf, high shelf, peaking), preamp
-- **Manopole Bassi e Alti** in stile Poweramp (solo rinforzo 0..+10 dB) con frequenza selezionabile; il Tono è separato dall'equalizzatore e dai preset
+- **Manopole Bassi e Alti** in stile Poweramp (solo rinforzo 0..+10 dB) con frequenza selezionabile; il Tono è separato dall'equalizzatore e dai preset. Hanno una voce propria: **bassi caldi** (shelf morbida + corpo a 90-220 Hz) e **alti freddi** (shelf netta + aria sopra i 9 kHz + leggera pulizia a 320 Hz). I valori sono in `ToneVoicing` (`EqConfig.kt`) e si possono ritoccare all'orecchio
 - **Preset** di fabbrica e preset salvabili; import/export compatibile con il JSON di Poweramp e con il testo AutoEQ
 - **Limiter look-ahead** (soglia e rilascio regolabili) e auto-headroom
 - **Analizzatore**: livelli, PPM, goniometro e RTA a 31 bande
@@ -27,6 +27,7 @@ Tra decoder e uscita c'è un unico processore audio che chiama un motore C++17 (
 
 - **Filtri**: cascata di biquad (formule dell'*Audio EQ Cookbook*) calcolati in Kotlin e processati in **doppia precisione**; campioni a 32 bit float.
 - **Formati in ingresso**: PCM 16, 24, 32 bit e float, da 1 a 8 canali. Uscita: 16 bit (con dither TPDF solo se il DSP è attivo) oppure float 32 bit.
+- **Rampa dei parametri**: coefficienti dei filtri e preamp passano ai nuovi valori in circa 30 ms, senza scatti quando si regolano le manopole o si carica un preset.
 - **Bypass reale**: con equalizzatore spento e manopole al centro l'audio non viene elaborato (PCM16 bit-exact, verificato dai test nativi).
 - **Limiter look-ahead** (5 ms, soglia -0,5 dBFS, rilascio 80 ms), attivo solo quando c'è elaborazione. Non gestisce i picchi inter-campione (true peak).
 - **Ricampionatore** libsoxr per l'uscita adattiva.

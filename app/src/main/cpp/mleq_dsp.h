@@ -142,6 +142,8 @@ public:
         sr_ = sampleRate;
         ch_ = std::max(1, std::min(channels, 8));
         state_.assign(static_cast<size_t>(ch_) * stages_ * 2, 0.0);
+        cur_.clear();  // nuova frequenza/canali: i coefficienti si applicano di colpo, senza rampa
+        rampLeft_ = 0;
         limiter_.prepare(sr_, ch_, lookaheadMs_);
         limiter_.setParams(thrDb_, relMs_);
         limiterReady_ = true;
@@ -149,16 +151,21 @@ public:
     }
 
     // coef: 5 valori per stadio [b0 b1 b2 a1 a2], normalizzati con a0 = 1.
+    // I nuovi coefficienti e il preamp non si applicano di colpo: si passa dai valori attuali ai
+    // nuovi con una rampa lineare di circa 30 ms (niente "zipper noise" ruotando le manopole).
     void setFilters(const double* coef, int stages, double preGain) {
-        if (stages != stages_) {
+        const bool resized = stages != stages_;
+        if (resized) {
             stages_ = stages;
             state_.assign(static_cast<size_t>(ch_) * stages_ * 2, 0.0);
         }
         coef_.assign(coef, coef + static_cast<size_t>(stages) * 5);
-        active_.assign(stages, 0);
-        for (int k = 0; k < stages; k++) {
-            const double* c = &coef_[static_cast<size_t>(k) * 5];
-            active_[k] = !(c[0] == 1.0 && c[1] == 0.0 && c[2] == 0.0 && c[3] == 0.0 && c[4] == 0.0);
+        if (resized || cur_.size() != coef_.size()) {
+            cur_ = coef_;  // primo caricamento: nessuna rampa
+            preCur_ = preGain;
+            rampLeft_ = 0;
+        } else {
+            rampLeft_ = std::max(256, static_cast<int>(sr_ * 0.03));
         }
         pre_ = preGain;
     }
@@ -177,6 +184,9 @@ public:
 
     void reset() {
         std::fill(state_.begin(), state_.end(), 0.0);
+        cur_ = coef_;
+        preCur_ = pre_;
+        rampLeft_ = 0;
         limiter_.reset();
         if (rsOn_) rs_.reset();
     }
@@ -278,21 +288,64 @@ private:
         }
     }
 
+    static bool isIdentity(const double* c) {
+        return c[0] == 1.0 && c[1] == 0.0 && c[2] == 0.0 && c[3] == 0.0 && c[4] == 0.0;
+    }
+
     void runFilters(int frames) {
         const size_t n = static_cast<size_t>(frames) * ch_;
         if (work_.size() < n) work_.resize(n);
         double* w = work_.data();
         const float* s = scratch_.data();
-        for (size_t i = 0; i < n; i++) w[i] = static_cast<double>(s[i]) * pre_;
+
+        // frame della rampa che cadono in questo blocco
+        const int nr = std::min(frames, rampLeft_);
+        const bool rampEnds = nr == rampLeft_;
+
+        // preamp (con rampa)
+        if (preCur_ == pre_) {
+            for (size_t i = 0; i < n; i++) w[i] = static_cast<double>(s[i]) * pre_;
+        } else {
+            const double dp = rampLeft_ > 0 ? (pre_ - preCur_) / rampLeft_ : 0.0;
+            for (int f = 0; f < frames; f++) {
+                const double g = f < nr ? preCur_ + dp * (f + 1) : pre_;
+                for (int c = 0; c < ch_; c++) {
+                    const size_t i = static_cast<size_t>(f) * ch_ + c;
+                    w[i] = static_cast<double>(s[i]) * g;
+                }
+            }
+            preCur_ = rampEnds ? pre_ : preCur_ + dp * nr;
+        }
 
         for (int k = 0; k < stages_; k++) {
-            if (!active_[k]) continue;
-            const double* c = &coef_[static_cast<size_t>(k) * 5];
-            const double b0 = c[0], b1 = c[1], b2 = c[2], a1 = c[3], a2 = c[4];
+            const double* t = &coef_[static_cast<size_t>(k) * 5];
+            double* cc = &cur_[static_cast<size_t>(k) * 5];
+            const bool same = cc[0] == t[0] && cc[1] == t[1] && cc[2] == t[2] && cc[3] == t[3] && cc[4] == t[4];
+            if (same && isIdentity(t)) continue;  // stadio neutro: salta
+
+            double d[5] = {0, 0, 0, 0, 0};
+            if (!same && rampLeft_ > 0) {
+                for (int i = 0; i < 5; i++) d[i] = (t[i] - cc[i]) / rampLeft_;
+            }
+            const int steps = same ? 0 : nr;
+
             for (int ch = 0; ch < ch_; ch++) {
                 double* z = &state_[(static_cast<size_t>(ch) * stages_ + k) * 2];
                 double z1 = z[0], z2 = z[1];
-                for (int f = 0; f < frames; f++) {
+                double b0 = cc[0], b1 = cc[1], b2 = cc[2], a1 = cc[3], a2 = cc[4];
+                int f = 0;
+                for (; f < steps; f++) {
+                    b0 += d[0]; b1 += d[1]; b2 += d[2]; a1 += d[3]; a2 += d[4];
+                    double& x = w[static_cast<size_t>(f) * ch_ + ch];
+                    const double y = b0 * x + z1;
+                    z1 = b1 * x - a1 * y + z2;
+                    z2 = b2 * x - a2 * y;
+                    x = y;
+                }
+                if (!same && rampEnds) {  // rampa finita: da qui in poi i coefficienti sono esattamente quelli nuovi
+                    b0 = t[0]; b1 = t[1]; b2 = t[2]; a1 = t[3]; a2 = t[4];
+                }
+                for (; f < frames; f++) {
                     double& x = w[static_cast<size_t>(f) * ch_ + ch];
                     const double y = b0 * x + z1;
                     z1 = b1 * x - a1 * y + z2;
@@ -302,13 +355,29 @@ private:
                 z[0] = z1;
                 z[1] = z2;
             }
+
+            if (!same) {
+                if (rampEnds) {
+                    for (int i = 0; i < 5; i++) cc[i] = t[i];
+                    if (isIdentity(t)) {
+                        // stadio tornato neutro: azzera lo stato, così non "risorge" alla riattivazione
+                        for (int ch = 0; ch < ch_; ch++) {
+                            double* z = &state_[(static_cast<size_t>(ch) * stages_ + k) * 2];
+                            z[0] = 0.0; z[1] = 0.0;
+                        }
+                    }
+                } else {
+                    for (int i = 0; i < 5; i++) cc[i] += d[i] * nr;
+                }
+            }
         }
+        rampLeft_ -= nr;
 
         bool bad = false;
-        float* d = scratch_.data();
+        float* dst = scratch_.data();
         for (size_t i = 0; i < n; i++) {
             const double v = w[i];
-            if (!std::isfinite(v)) { bad = true; d[i] = 0.0f; } else d[i] = static_cast<float>(v);
+            if (!std::isfinite(v)) { bad = true; dst[i] = 0.0f; } else dst[i] = static_cast<float>(v);
         }
         if (bad) std::fill(state_.begin(), state_.end(), 0.0);  // filtro instabile: riparti da zero
     }
@@ -349,9 +418,9 @@ private:
     }
 
     int sr_ = 44100, ch_ = 2, stages_ = 0;
-    double pre_ = 1.0;
-    std::vector<double> coef_, state_, work_;
-    std::vector<uint8_t> active_;
+    double pre_ = 1.0, preCur_ = 1.0;
+    int rampLeft_ = 0;
+    std::vector<double> coef_, cur_, state_, work_;
     std::vector<float> scratch_, rsOut_;
     Resampler rs_;
     bool rsOn_ = false;

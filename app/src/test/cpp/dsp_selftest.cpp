@@ -182,6 +182,84 @@ static void testResample() {
     }
 }
 
+
+// ---- rampa dei coefficienti e del preamp (niente scatti quando si ruotano le manopole)
+
+static std::vector<float> sineBlock(double f, double amp, double fs, int start, int frames) {
+    std::vector<float> v(static_cast<size_t>(frames) * 2);
+    for (int i = 0; i < frames; i++) v[2 * i] = v[2 * i + 1] = static_cast<float>(amp * std::sin(2 * kPi * f * (start + i) / fs));
+    return v;
+}
+
+static void runFloat(Engine& e, std::vector<float>& in, std::vector<float>& out, int frames) {
+    out.assign(in.size(), 0.0f);
+    e.process(reinterpret_cast<uint8_t*>(in.data()), kEncFloat, frames, reinterpret_cast<uint8_t*>(out.data()), kEncFloat, false);
+}
+
+static void testCoefRamp() {
+    const double fs = 48000.0, f = 1000.0, amp = 0.3;
+    double idc[5] = {1, 0, 0, 0, 0}, pk[5];
+    peaking(fs, f, 1.0, 10.0, pk);
+    Engine a; a.configure(48000, 2); a.setFilters(idc, 1, 1.0);
+    Engine b; b.configure(48000, 2); b.setFilters(pk, 1, 1.0);
+    std::vector<float> in, out, outB;
+    in = sineBlock(f, amp, fs, 0, 4096); runFloat(a, in, out, 4096);
+    a.setFilters(pk, 1, 1.0);  // cambio improvviso: +10 dB a 1 kHz
+    float prev = out[2 * 4095];
+    double maxStep = 0.0;
+    for (int blk = 1; blk < 12; blk++) {
+        in = sineBlock(f, amp, fs, blk * 4096, 4096); runFloat(a, in, out, 4096);
+        for (int i = 0; i < 4096; i++) { maxStep = std::max(maxStep, static_cast<double>(std::fabs(out[2 * i] - prev))); prev = out[2 * i]; }
+    }
+    // ampiezza finale = 0.3 * 3.16 = 0.95: passo massimo naturale = 2*pi*f*A/fs = 0.12
+    CHECK(maxStep < 0.16, "rampa coefficienti: nessuno scatto al cambio improvviso del filtro");
+    // a regime l'uscita coincide con un motore che ha avuto il filtro fin dall'inizio
+    for (int blk = 0; blk < 12; blk++) { in = sineBlock(f, amp, fs, blk * 4096, 4096); runFloat(b, in, outB, 4096); }
+    double err = 0.0;
+    for (int i = 0; i < 2048; i++) err = std::max(err, static_cast<double>(std::fabs(out[2 * (4095 - i)] - outB[2 * (4095 - i)])));
+    CHECK(err < 1e-4, "rampa coefficienti: a regime il risultato e' quello del filtro nuovo");
+}
+
+static void testPreampRamp() {
+    const double fs = 48000.0, f = 100.0, amp = 0.5;
+    double idc[5] = {1, 0, 0, 0, 0};
+    Engine e; e.configure(48000, 2); e.setFilters(idc, 1, 1.0);
+    std::vector<float> in = sineBlock(f, amp, fs, 0, 2048), out;
+    runFloat(e, in, out, 2048);
+    e.setFilters(idc, 1, 0.1);  // preamp da 0 a -20 dB di colpo
+    float prev = out[2 * 2047];
+    double maxStep = 0.0;
+    for (int blk = 1; blk < 6; blk++) {
+        in = sineBlock(f, amp, fs, blk * 2048, 2048); runFloat(e, in, out, 2048);
+        for (int i = 0; i < 2048; i++) { maxStep = std::max(maxStep, static_cast<double>(std::fabs(out[2 * i] - prev))); prev = out[2 * i]; }
+    }
+    CHECK(maxStep < 0.02, "rampa preamp: nessuno scatto al cambio improvviso del livello");
+    float pk = 0;
+    for (int i = 0; i < 2048; i++) pk = std::max(pk, std::fabs(out[2 * i]));
+    CHECK(std::fabs(pk - 0.05f) < 0.002f, "rampa preamp: livello finale esatto (-20 dB)");
+}
+
+static void testRampToIdentity() {
+    const double fs = 48000.0;
+    double idc[5] = {1, 0, 0, 0, 0}, pk[5];
+    peaking(fs, 200.0, 0.6, 3.0, pk);
+    Engine e; e.configure(48000, 2); e.setFilters(pk, 1, 1.0);
+    std::vector<float> in = sineBlock(200.0, 0.3, fs, 0, 4096), out;
+    runFloat(e, in, out, 4096);
+    e.setFilters(idc, 1, 1.0);  // stadio che torna neutro
+    for (int blk = 1; blk < 6; blk++) { in = sineBlock(200.0, 0.3, fs, blk * 4096, 4096); runFloat(e, in, out, 4096); }
+    double err = 0.0;
+    for (int i = 0; i < 4096; i++) err = std::max(err, static_cast<double>(std::fabs(out[2 * i] - in[2 * i])));
+    CHECK(err < 1e-6, "rampa verso lo stadio neutro: uscita identica all'ingresso");
+    e.setFilters(pk, 1, 1.0);  // e di nuovo attivo: nessuno stato "vecchio" che risorge
+    double maxStep = 0.0; float prev = out[2 * 4095];
+    for (int blk = 6; blk < 12; blk++) {
+        in = sineBlock(200.0, 0.3, fs, blk * 4096, 4096); runFloat(e, in, out, 4096);
+        for (int i = 0; i < 4096; i++) { maxStep = std::max(maxStep, static_cast<double>(std::fabs(out[2 * i] - prev))); prev = out[2 * i]; }
+    }
+    CHECK(maxStep < 0.02, "riattivazione dello stadio: nessuno scatto");
+}
+
 int main() {
     testResample();
     testBypassBitExact();
@@ -191,6 +269,9 @@ int main() {
     testFlushAndLongRun();
     testStability();
     testChannels();
+    testCoefRamp();
+    testPreampRamp();
+    testRampToIdentity();
     std::printf(failures ? "\n%d TEST FALLITI\n" : "\nTUTTI I TEST NATIVI SUPERATI\n", failures);
     return failures ? 1 : 0;
 }

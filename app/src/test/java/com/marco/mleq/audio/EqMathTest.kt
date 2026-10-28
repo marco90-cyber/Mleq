@@ -74,7 +74,7 @@ class EqMathTest {
             assertEquals(n, cfg.freqs.size)
             assertEquals(n, cfg.gains.size)
             assertEquals(n, cfg.qs.size)
-            assertEquals(n + 2, EqMath.stages(cfg, 48000.0).size)
+            assertEquals(n + 5, EqMath.stages(cfg, 48000.0).size)
         }
     }
 
@@ -175,4 +175,73 @@ class EqMathTest {
         assertTrue(more.gains.first() > 3f)
         assertTrue(more.gains.last() < 1f)
     }
+
+    // ---- voce delle manopole: bassi caldi, alti freddi
+
+    @Test
+    fun toneStagesAreNeutralWhenKnobsAreZero() {
+        val st = EqMath.stages(EqConfig(enabled = false), 48000.0)
+        assertEquals(EqMath.stageCount(10), st.size)
+        assertTrue(st.all { it === EqMath.IDENTITY })
+    }
+
+    @Test
+    fun warmBassAddsBodyAboveTheShelf() {
+        val fs = 48000.0
+        val cfg = EqConfig(bassPercent = 100)            // +10 dB, shelf a 100 Hz
+        val plain = EqMath.lowShelf(fs, 100.0, 10.0)      // shelf semplice, come prima
+        // in fondo alla gamma la shelf morbida arriva a +10 dB come prima
+        assertEquals(10.0, cfg.toneResponseDb(20.0, fs), 0.6)
+        // nei medio-bassi c'è corpo in più rispetto alla sola shelf
+        for (f in listOf(150.0, 200.0, 300.0)) {
+            assertTrue("a $f Hz", cfg.toneResponseDb(f, fs) > EqMath.magnitudeDb(plain, fs, f) + 2.0)
+        }
+        // niente effetto sopra i 2 kHz
+        assertEquals(0.0, cfg.toneResponseDb(2000.0, fs), 0.3)
+        // nessun picco oltre shelf + corpo
+        var peak = 0.0
+        for (i in 0 until 256) peak = maxOf(peak, cfg.toneResponseDb(20.0 * Math.pow(1000.0, i / 255.0), fs))
+        assertTrue("picco $peak dB", peak <= 10.0 + 0.3)
+    }
+
+    @Test
+    fun coldTrebleAddsAirAndCleansTheLowMids() {
+        val fs = 48000.0
+        val cfg = EqConfig(treblePercent = 100)           // +10 dB, shelf a 10 kHz
+        // aria: sopra la shelf si supera i +10 dB della sola shelf
+        assertTrue(cfg.toneResponseDb(16000.0, fs) > 11.0)
+        assertTrue(cfg.toneResponseDb(16000.0, fs) < 14.0)
+        // pulizia: attorno ai 320 Hz un leggero taglio, mai oltre -1,5 dB
+        val clean = cfg.toneResponseDb(320.0, fs)
+        assertTrue("a 320 Hz = $clean", clean in -1.5..-0.8)
+        // le frequenze basse restano quasi intatte
+        assertEquals(0.0, cfg.toneResponseDb(50.0, fs), 0.2)
+        // nessun picco eccessivo
+        var peak = 0.0
+        for (i in 0 until 256) peak = maxOf(peak, cfg.toneResponseDb(20.0 * Math.pow(1000.0, i / 255.0), fs))
+        assertTrue("picco $peak dB", peak < 13.5)
+    }
+
+    @Test
+    fun toneStagesStayFiniteAtAnySampleRate() {
+        for (fs in listOf(8000.0, 22050.0, 44100.0, 96000.0, 192000.0)) {
+            val cfg = EqConfig(bassPercent = 100, treblePercent = 100, bassFreq = 400f, trebleFreq = 16000f)
+            for (c in EqMath.stages(cfg, fs)) {
+                for (v in listOf(c.b0, c.b1, c.b2, c.a1, c.a2)) assertTrue("fs=$fs", v.isFinite())
+            }
+            for (f in listOf(20.0, 1000.0, 15000.0)) assertTrue(cfg.toneResponseDb(f, fs).isFinite())
+        }
+    }
+
+    @Test
+    fun shelfSlopeKeepsPlainShelfAtDefault() {
+        val fs = 48000.0
+        val a = EqMath.lowShelf(fs, 200.0, 8.0)
+        val b = EqMath.lowShelf(fs, 200.0, 8.0, 1.0)
+        for (f in listOf(30.0, 200.0, 2000.0)) assertEquals(EqMath.magnitudeDb(a, fs, f), EqMath.magnitudeDb(b, fs, f), 1e-12)
+        // pendenza più dolce: a metà della transizione la shelf morbida sale prima
+        val soft = EqMath.lowShelf(fs, 200.0, 8.0, 0.75)
+        assertTrue(EqMath.magnitudeDb(soft, fs, 400.0) > EqMath.magnitudeDb(a, fs, 400.0))
+    }
 }
+

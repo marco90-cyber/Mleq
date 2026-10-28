@@ -596,14 +596,14 @@ private fun TonePanel(env: AppEnv, eq: EqConfig, onFreq: (FreqTarget) -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         ToneKnob(
-            title = "Bassi", percent = eq.bassPercent, freq = eq.bassFreq, color = BassColor,
+            title = "Bassi caldi", percent = eq.bassPercent, freq = eq.bassFreq, color = BassColor,
             onTick = { env.feedback.tapScreen() },
             onDetent = { env.feedback.detent() },
             onChange = { v -> settings.updateEq { it.copy(bassPercent = v) } },
             onFreqClick = { onFreq(FreqTarget.Bass) },
         )
         ToneKnob(
-            title = "Alti", percent = eq.treblePercent, freq = eq.trebleFreq, color = Accent,
+            title = "Alti freddi", percent = eq.treblePercent, freq = eq.trebleFreq, color = Accent,
             onTick = { env.feedback.tapScreen() },
             onDetent = { env.feedback.detent() },
             onChange = { v -> settings.updateEq { it.copy(treblePercent = v) } },
