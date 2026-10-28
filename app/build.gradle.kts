@@ -16,7 +16,7 @@ android {
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
-        buildConfigField("String", "REPO_URL", "\"https://github.com/marco90-cyber/MLEqualizer\"")
+        buildConfigField("String", "REPO_URL", "\"https://github.com/marco90-cyber/Mleq\"")
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
