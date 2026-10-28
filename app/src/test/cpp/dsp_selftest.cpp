@@ -260,12 +260,63 @@ static void testRampToIdentity() {
     CHECK(maxStep < 0.02, "riattivazione dello stadio: nessuno scatto");
 }
 
+// True peak di riferimento, indipendente dal limiter: interpolazione sinc (Blackman, 64 punti)
+// a 16 fasi per campione.
+static double refTruePeak(const std::vector<float>& x, int skip) {
+    double pk = 0.0;
+    const int H = 32;
+    for (int n = skip + H; n + H < static_cast<int>(x.size()); n++) {
+        for (int ph = 0; ph < 16; ph++) {
+            const double fr = ph / 16.0;
+            double acc = 0.0;
+            for (int j = -H + 1; j <= H; j++) {
+                const double t = j - fr;
+                const double sinc = std::fabs(t) < 1e-12 ? 1.0 : std::sin(kPi * t) / (kPi * t);
+                const double w = 0.42 + 0.5 * std::cos(kPi * t / H) + 0.08 * std::cos(2 * kPi * t / H);
+                acc += x[n + j] * sinc * w;
+            }
+            pk = std::max(pk, std::fabs(acc));
+        }
+    }
+    return pk;
+}
+
+static void testTruePeak() {
+    const double fs = 44100.0;
+    const float thr = std::pow(10.0f, -1.0f / 20.0f);
+    struct Case { double f, ph, amp; const char* name; };
+    const Case cases[] = {
+        {fs / 4, kPi / 4, 1.273, "fs/4 con fase 45 gradi (campioni a 0,9, picco vero 1,27)"},
+        {0.36 * fs, 0.7, 1.4, "sinusoide a 0,36 fs, ampiezza 1,4"},
+        {0.2 * fs, 1.1, 1.8, "sinusoide a 0,2 fs, ampiezza 1,8"},
+    };
+    for (const Case& cs : cases) {
+        Engine e; e.configure(44100, 2);
+        e.setLimiter(true, -1.0f, 80.0f, 5.0f);
+        const int frames = 20000;
+        std::vector<float> in(static_cast<size_t>(frames) * 2), out(in.size());
+        for (int i = 0; i < frames; i++) {
+            const float v = static_cast<float>(cs.amp * std::sin(2 * kPi * cs.f * i / fs + cs.ph));
+            in[2 * i] = v; in[2 * i + 1] = v;
+        }
+        runFloat(e, in, out, frames);
+        std::vector<float> mono(frames);
+        for (int i = 0; i < frames; i++) mono[i] = out[2 * i];
+        double sp = 0; for (int i = 2000; i < frames; i++) sp = std::max(sp, (double)std::fabs(mono[i]));
+        const double tp = refTruePeak(mono, 2000);
+        char msg[200];
+        std::snprintf(msg, sizeof msg, "true-peak: %s -> picco campioni %.3f, picco vero %.3f (soglia %.3f)", cs.name, sp, tp, thr);
+        CHECK(tp <= thr * 1.03, msg);
+    }
+}
+
 int main() {
     testResample();
     testBypassBitExact();
     testPcm24ToFloat();
     testFilterGain();
     testLimiter();
+    testTruePeak();
     testFlushAndLongRun();
     testStability();
     testChannels();

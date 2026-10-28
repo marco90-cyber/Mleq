@@ -44,8 +44,14 @@ public:
         sr_ = sampleRate > 1000.0 ? sampleRate : 44100.0;
         ch_ = std::max(1, channels);
         L_ = std::max(2, static_cast<int>(lookaheadMs * 0.001 * sr_));
-        D_ = L_ - 1;
-        delay_.assign(static_cast<size_t>(L_) * ch_, 0.0f);
+        // il rilevatore true-peak vede un picco tra campioni con al massimo kTpHalf campioni di
+        // ritardo: l'audio esce kTpHalf campioni piu' tardi, cosi' ogni picco e' gia' "noto"
+        // a tutta la finestra di gain che lo copre
+        D_ = L_ - 1 + kTpHalf;
+        DL_ = L_ + kTpHalf;
+        delay_.assign(static_cast<size_t>(DL_) * ch_, 0.0f);
+        hist_.assign(static_cast<size_t>(kTpTaps) * ch_, 0.0f);
+        histPos_ = 0;
         rRing_.assign(L_, 1.0f);
         dqCap_ = L_ + 1;
         dqIdx_.assign(dqCap_, 0);
@@ -63,6 +69,8 @@ public:
 
     void reset() {
         std::fill(delay_.begin(), delay_.end(), 0.0f);
+        std::fill(hist_.begin(), hist_.end(), 0.0f);
+        histPos_ = 0;
         std::fill(rRing_.begin(), rRing_.end(), 1.0f);
         sum_ = static_cast<double>(L_);
         r_ = 1.0f;
@@ -82,6 +90,7 @@ public:
             float* fr = buf + static_cast<size_t>(f) * ch_;
             float peak = 0.0f;
             for (int c = 0; c < ch_; c++) peak = std::max(peak, std::fabs(fr[c]));
+            peak = std::max(peak, truePeakStep(fr));
             const float need = peak > thr_ ? thr_ / peak : 1.0f;
 
             // minimo mobile degli ultimi L valori di "need"
@@ -103,8 +112,9 @@ public:
             if (g < minGain_) minGain_ = g;
 
             // ritardo di D campioni
-            float* in = &delay_[static_cast<size_t>(slot) * ch_];
-            const float* out = &delay_[static_cast<size_t>((n_ + 1) % L_) * ch_];
+            const int dslot = static_cast<int>(n_ % DL_);
+            float* in = &delay_[static_cast<size_t>(dslot) * ch_];
+            const float* out = &delay_[static_cast<size_t>((n_ + 1) % DL_) * ch_];
             for (int c = 0; c < ch_; c++) in[c] = fr[c];
             for (int c = 0; c < ch_; c++) {
                 const float v = out[c] * g;
@@ -120,6 +130,69 @@ public:
     }
 
 private:
+    // ---- rilevatore true-peak: sovracampionamento x4 (3 fasi intermedie) con sinc finestrata
+    // Kaiser, kTpTaps punti per fase. Stima i picchi tra campioni che il solo massimo dei campioni
+    // non vede (un DAC li ricostruisce e puo' superare 0 dBFS anche con campioni sotto la soglia).
+    static constexpr int kTpTaps = 16;
+    static constexpr int kTpHalf = kTpTaps / 2;
+
+    static double bessel0(double x) {
+        double sum = 1.0, term = 1.0;
+        for (int k = 1; k < 40; k++) {
+            term *= (x / (2.0 * k)) * (x / (2.0 * k));
+            sum += term;
+        }
+        return sum;
+    }
+
+    static const float* tpCoefs() {
+        static float c[3][kTpTaps];
+        static bool ready = false;
+        if (!ready) {
+            const double beta = 9.0, pi = 3.14159265358979323846;
+            for (int ph = 1; ph <= 3; ph++) {
+                const double frac = ph / 4.0;
+                double sum = 0.0;
+                double tmp[kTpTaps];
+                for (int j = 0; j < kTpTaps; j++) {
+                    // la fase cade tra i campioni di indice kTpHalf-1 e kTpHalf
+                    const double t = j - (kTpHalf - 1) - frac;
+                    const double sinc = std::fabs(t) < 1e-12 ? 1.0 : std::sin(pi * t) / (pi * t);
+                    const double r = t / kTpHalf;
+                    const double win = std::fabs(r) >= 1.0 ? 0.0 : bessel0(beta * std::sqrt(1.0 - r * r)) / bessel0(beta);
+                    tmp[j] = sinc * win;
+                    sum += tmp[j];
+                }
+                for (int j = 0; j < kTpTaps; j++) c[ph - 1][j] = static_cast<float>(tmp[j] / sum);
+            }
+            ready = true;
+        }
+        return &c[0][0];
+    }
+
+    // Inserisce il frame e ritorna il massimo |valore| tra i campioni interpolati.
+    float truePeakStep(const float* fr) {
+        const float* co = tpCoefs();
+        float* h = &hist_[0];
+        // finestra scorrevole per canale: hist_[c * kTpTaps + j], j=0 piu' vecchio
+        float peak = 0.0f;
+        for (int c = 0; c < ch_; c++) {
+            float* hc = h + static_cast<size_t>(c) * kTpTaps;
+            for (int j = 0; j < kTpTaps - 1; j++) hc[j] = hc[j + 1];
+            hc[kTpTaps - 1] = fr[c];
+            for (int ph = 0; ph < 3; ph++) {
+                const float* k = co + ph * kTpTaps;
+                float acc = 0.0f;
+                for (int j = 0; j < kTpTaps; j++) acc += hc[j] * k[j];
+                peak = std::max(peak, std::fabs(acc));
+            }
+        }
+        return peak;
+    }
+
+    std::vector<float> hist_;
+    int histPos_ = 0;
+    int DL_ = 220 + kTpHalf;
     double sr_ = 44100.0;
     int ch_ = 2, L_ = 220, D_ = 219;
     float thresholdDb_ = -0.5f, releaseMs_ = 80.0f;

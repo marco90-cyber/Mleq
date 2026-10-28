@@ -25,11 +25,11 @@ Build locale: `gradle :app:assembleRelease` (Gradle 8.9, JDK 17, Android SDK 35,
 
 Tra decoder e uscita c'è un unico processore audio che chiama un motore C++17 (JNI, `app/src/main/cpp`):
 
-- **Filtri**: cascata di biquad (formule dell'*Audio EQ Cookbook*) calcolati in Kotlin e processati in **doppia precisione**; campioni a 32 bit float.
+- **Filtri**: cascata di biquad (*Audio EQ Cookbook* o variante "matched" più fedele alla curva analogica vicino a Nyquist, scelta per banda in base all'errore) calcolati in Kotlin e processati in **doppia precisione**; campioni a 32 bit float.
 - **Formati in ingresso**: PCM 16, 24, 32 bit e float, da 1 a 8 canali. Uscita: 16 bit (con dither TPDF solo se il DSP è attivo) oppure float 32 bit.
 - **Rampa dei parametri**: coefficienti dei filtri e preamp passano ai nuovi valori in circa 30 ms, senza scatti quando si regolano le manopole o si carica un preset.
 - **Bypass reale**: con equalizzatore spento e manopole al centro l'audio non viene elaborato (PCM16 bit-exact, verificato dai test nativi).
-- **Limiter look-ahead** (5 ms, soglia -0,5 dBFS, rilascio 80 ms), attivo solo quando c'è elaborazione. Non gestisce i picchi inter-campione (true peak).
+- **Limiter look-ahead true-peak** (5 ms, soglia -0,5 dBFS, rilascio 80 ms), attivo solo quando c'è elaborazione. Rileva anche i picchi tra un campione e l'altro (sovracampionamento x4, sinc Kaiser a 16 punti) con 8 campioni di ritardo in più; la stima è precisa entro circa 0,15 dB, non è un misuratore certificato ITU.
 - **Ricampionatore** libsoxr per l'uscita adattiva.
 
 ### Limiti
