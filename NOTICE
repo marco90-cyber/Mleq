@@ -1,0 +1,16 @@
+MLEqualizer - avvisi di terze parti
+
+Origine: il motore DSP, l'equalizzatore, l'analizzatore e i preset derivano da MLPod
+(https://github.com/marco90-cyber/MLPod), stesso autore, licenza GPL-3.0-or-later.
+
+Tryptify (https://github.com/tryptz/Tryptify) - GPL-3.0
+  L'algoritmo del limiter look-ahead in app/src/main/cpp/mleq_dsp.h (massimo mobile con deque
+  monotona, ritardo look-ahead, rilascio esponenziale) si ispira a LimiterProcessor
+  (app/src/main/cpp/dsp/snapins/limiter.h). Il codice e' stato riscritto e modificato:
+  canali multipli, contatori a 64 bit, garanzia di soglia.
+
+Audio EQ Cookbook, Robert Bristow-Johnson - formule dei filtri biquad (nessun codice incluso).
+
+libsoxr (SoX Resampler Library) - Copyright (c) 2007-18 robs@users.sourceforge.net
+Licenza: GNU LGPL v2.1 o successiva (testo in app/src/main/cpp/soxr/LICENCE e COPYING.LGPL).
+Usata per il ricampionamento dell'uscita adattiva; sorgenti in app/src/main/cpp/soxr/.

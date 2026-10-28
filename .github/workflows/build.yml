@@ -1,0 +1,79 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Rileva NDK e CMake del runner
+        run: |
+          NDK_VER=$(ls "$ANDROID_HOME/ndk" | sort -V | tail -1)
+          echo "NDK trovato: $NDK_VER"
+          echo "ANDROID_NDK_VERSION=$NDK_VER" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/cmake" || true
+
+      - name: Test nativi del motore DSP (g++ sul runner)
+        run: |
+          S=app/src/main/cpp/soxr
+          for f in soxr data-io dbesi0 filter fft4g64 fft4g32 cr cr32 cr64; do
+            gcc -O2 -w -DSOXR_LIB -DNDEBUG -I$S -c $S/$f.c -o /tmp/soxr_$f.o
+          done
+          g++ -std=c++17 -O2 -Wall app/src/test/cpp/dsp_selftest.cpp /tmp/soxr_*.o -lm -o dsp_selftest
+          ./dsp_selftest
+
+      - name: Test unitari Kotlin
+        shell: bash
+        run: |
+          set +e
+          gradle :app:testDebugUnitTest --stacktrace 2>&1 | tee out_test.txt
+          st=${PIPESTATUS[0]}
+          if [ $st -ne 0 ]; then
+            grep -E "^e: |FAILED|AssertionError|Exception|expected|error:" out_test.txt | head -25 | while IFS= read -r l; do echo "::error::${l:0:400}"; done
+          fi
+          exit $st
+
+      - name: Compila APK (release)
+        shell: bash
+        run: |
+          set +e
+          gradle :app:assembleRelease --stacktrace 2>&1 | tee out_build.txt
+          st=${PIPESTATUS[0]}
+          if [ $st -ne 0 ]; then
+            grep -E "^e: |error:|What went wrong|FAILED|Execution failed|CMake|ndk" out_build.txt | head -25 | while IFS= read -r l; do echo "::error::${l:0:400}"; done
+          fi
+          exit $st
+
+      - name: Rinomina APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/MLEqualizer-1.0.${{ github.run_number }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MLEqualizer-apk
+          path: dist/*.apk
+
+      - name: Crea release con l'APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: MLEqualizer 1.0.${{ github.run_number }}
+          files: dist/*.apk

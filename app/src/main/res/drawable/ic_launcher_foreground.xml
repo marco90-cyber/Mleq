@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- sei cursori dell'equalizzatore -->
+    <path android:fillColor="#FF3A3D45" android:pathData="M30,32 h4 v44 h-4 z" />
+    <path android:fillColor="#FF3A3D45" android:pathData="M41,32 h4 v44 h-4 z" />
+    <path android:fillColor="#FF3A3D45" android:pathData="M52,32 h4 v44 h-4 z" />
+    <path android:fillColor="#FF3A3D45" android:pathData="M63,32 h4 v44 h-4 z" />
+    <path android:fillColor="#FF3A3D45" android:pathData="M74,32 h4 v44 h-4 z" />
+    <!-- maniglie -->
+    <path android:fillColor="#FF00E676" android:pathData="M27,56 h10 v7 h-10 z" />
+    <path android:fillColor="#FF00E676" android:pathData="M38,42 h10 v7 h-10 z" />
+    <path android:fillColor="#FF00E676" android:pathData="M49,34 h10 v7 h-10 z" />
+    <path android:fillColor="#FF00E676" android:pathData="M60,48 h10 v7 h-10 z" />
+    <path android:fillColor="#FF00E676" android:pathData="M71,60 h10 v7 h-10 z" />
+</vector>
