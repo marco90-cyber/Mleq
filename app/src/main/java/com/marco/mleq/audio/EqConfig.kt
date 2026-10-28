@@ -96,6 +96,17 @@ data class EqConfig(
     fun effectiveGains(fs: Double): List<Float> =
         if (faithful && enabled && bandCount > 1) EqMath.fitGains(this, fs) else gains
 
+    /** Tipo di filtro di una banda: 0 = low shelf, 1 = high shelf, 2 = peaking. */
+    fun withType(index: Int, type: Int): EqConfig {
+        if (index !in 0 until bandCount) return this
+        val list = MutableList(bandCount) { typeAt(it) }
+        list[index] = type.coerceIn(0, 2)
+        return copy(types = if (list.all { it == 2 }) emptyList() else list)
+    }
+
+    /** Preamp scelto a mano. */
+    fun withPreamp(db: Float): EqConfig = copy(preampDb = db.coerceIn(-GAIN_RANGE, GAIN_RANGE))
+
     /** Q effettivo di una banda. */
     fun qFor(index: Int): Double = (qs.getOrNull(index) ?: 1f).toDouble().coerceIn(MIN_Q.toDouble(), MAX_Q.toDouble())
 

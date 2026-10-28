@@ -332,4 +332,15 @@ class EqMathTest {
         assertFalse(EqConfig.fromJson(cfg.toJson()).faithful)
         assertTrue(EqConfig.fromJson(cfg.copy(faithful = true).toJson()).faithful)
     }
+
+    @Test
+    fun manualTypeAndPreampEditsAreClampedAndCompact() {
+        val cfg = EqConfig(bandCount = 10)
+        val t = cfg.withType(0, 0).withType(9, 1)
+        assertEquals(0, t.typeAt(0)); assertEquals(1, t.typeAt(9)); assertEquals(2, t.typeAt(4))
+        assertTrue(t.withType(0, 2).withType(9, 2).types.isEmpty())
+        assertEquals(cfg, cfg.withType(99, 0))
+        assertEquals(EqConfig.GAIN_RANGE, cfg.withPreamp(40f).preampDb, 0f)
+        assertEquals(-EqConfig.GAIN_RANGE, cfg.withPreamp(-40f).preampDb, 0f)
+    }
 }
