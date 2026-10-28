@@ -297,4 +297,39 @@ class EqMathTest {
             }
         }
     }
+
+    @Test
+    fun faithfulCurvePassesThroughTheSliderValues() {
+        val fs = 48000.0
+        val plain = EqConfig(enabled = true, bandCount = 10, gains = List(10) { 6f })
+        val fixed = plain.copy(faithful = true)
+        // senza compensazione le campane vicine si sommano e superano i +6 dB
+        val over = plain.freqs.indices.maxOf { plain.responseDb(plain.freqs[it].toDouble(), fs, false) }
+        assertTrue("senza compensazione dovrebbe superare +6 dB: $over", over > 7.0)
+        for (i in 0 until 10) {
+            val v = fixed.responseDb(fixed.freqs[i].toDouble(), fs, false)
+            assertEquals("banda $i", 6.0, v, 0.05)
+        }
+    }
+
+    @Test
+    fun faithfulCurveHandlesAlternatingGainsAndStaysInRange() {
+        val fs = 48000.0
+        val gains = List(10) { if (it % 2 == 0) 8f else -5f }
+        val cfg = EqConfig(enabled = true, bandCount = 10, gains = gains, faithful = true)
+        val eff = cfg.effectiveGains(fs)
+        assertTrue(eff.all { it.isFinite() && abs(it) <= EqConfig.GAIN_RANGE + 1e-3f })
+        for (i in 0 until 10) {
+            val v = cfg.responseDb(cfg.freqs[i].toDouble(), fs, false)
+            assertEquals("banda $i", gains[i].toDouble(), v, 0.3)
+        }
+    }
+
+    @Test
+    fun faithfulCurveIsOffByDefaultAndKeepsGainsUntouched() {
+        val cfg = EqConfig(enabled = true, gains = List(10) { 3f })
+        assertEquals(cfg.gains, cfg.effectiveGains(48000.0))
+        assertFalse(EqConfig.fromJson(cfg.toJson()).faithful)
+        assertTrue(EqConfig.fromJson(cfg.copy(faithful = true).toJson()).faithful)
+    }
 }

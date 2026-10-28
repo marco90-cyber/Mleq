@@ -38,6 +38,12 @@ data class EqConfig(
     val trebleFreq: Float = 10000f,
     val limiterOn: Boolean = true,
     val autoHeadroom: Boolean = false,
+    /**
+     * "Curva fedele": i cursori sono i valori che si vogliono ottenere sulla curva totale; i
+     * guadagni reali dei filtri vengono ricalcolati per compensare la sovrapposizione delle
+     * campane vicine (vedi [EqMath.fitGains]).
+     */
+    val faithful: Boolean = false,
     /** Soglia del limiter in dBFS (-12..0). */
     val limiterThresholdDb: Float = -0.5f,
     /** Rilascio del limiter in ms (20..500). */
@@ -85,6 +91,10 @@ data class EqConfig(
         val gs = points.map { it.second }
         return copy(gains = freqs.map { f -> interpolate(fs, gs, f).coerceIn(-GAIN_RANGE, GAIN_RANGE) })
     }
+
+    /** Guadagni realmente applicati ai filtri (con "curva fedele" sono ricalcolati). */
+    fun effectiveGains(fs: Double): List<Float> =
+        if (faithful && enabled && bandCount > 1) EqMath.fitGains(this, fs) else gains
 
     /** Q effettivo di una banda. */
     fun qFor(index: Int): Double = (qs.getOrNull(index) ?: 1f).toDouble().coerceIn(MIN_Q.toDouble(), MAX_Q.toDouble())
@@ -141,6 +151,7 @@ data class EqConfig(
         o.put("toneV", 3)
         o.put("limiter", limiterOn)
         o.put("autoHeadroom", autoHeadroom)
+        o.put("faithful", faithful)
         o.put("limThr", limiterThresholdDb.toDouble())
         o.put("limRel", limiterReleaseMs.toDouble())
         o.put("preamp", preampDb.toDouble())
@@ -261,6 +272,7 @@ data class EqConfig(
                     trebleFreq = o.optDouble("trebleFreq", 10000.0).toFloat(),
                     limiterOn = o.optBoolean("limiter", true),
                     autoHeadroom = o.optBoolean("autoHeadroom", false),
+                    faithful = o.optBoolean("faithful", false),
                     limiterThresholdDb = o.optDouble("limThr", -0.5).toFloat().coerceIn(-12f, 0f),
                     limiterReleaseMs = o.optDouble("limRel", 80.0).toFloat().coerceIn(20f, 500f),
                 )
@@ -302,6 +314,108 @@ object EqMath {
 
     private fun norm(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) =
         Coef(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+
+    private fun bandCoef(type: Int, fs: Double, f: Double, q: Double, g: Double): Coef = when (type) {
+        0 -> lowShelf(fs, f, g)
+        1 -> highShelf(fs, f, g)
+        else -> peaking(fs, f, q, g)
+    }
+
+    private data class FitKey(
+        val fs: Double, val freqs: List<Float>, val qs: List<Float>, val types: List<Int>, val targets: List<Float>,
+    )
+
+    @Volatile
+    private var fitCache: Pair<FitKey, List<Float>>? = null
+
+    /** Risolve A x = b (eliminazione di Gauss con pivot parziale). Null se singolare. */
+    private fun solve(a: Array<DoubleArray>, b: DoubleArray): DoubleArray? {
+        val n = b.size
+        for (col in 0 until n) {
+            var piv = col
+            for (r in col + 1 until n) if (kotlin.math.abs(a[r][col]) > kotlin.math.abs(a[piv][col])) piv = r
+            if (kotlin.math.abs(a[piv][col]) < 1e-12) return null
+            if (piv != col) {
+                val t = a[piv]; a[piv] = a[col]; a[col] = t
+                val tb = b[piv]; b[piv] = b[col]; b[col] = tb
+            }
+            for (r in col + 1 until n) {
+                val k = a[r][col] / a[col][col]
+                if (k == 0.0) continue
+                for (c in col until n) a[r][c] -= k * a[col][c]
+                b[r] -= k * b[col]
+            }
+        }
+        val x = DoubleArray(n)
+        for (r in n - 1 downTo 0) {
+            var sum = b[r]
+            for (c in r + 1 until n) sum -= a[r][c] * x[c]
+            x[r] = sum / a[r][r]
+        }
+        return x
+    }
+
+    /**
+     * "Curva fedele": trova i guadagni dei filtri per cui la curva TOTALE delle bande (senza
+     * manopole né preamp) passa esattamente dai valori dei cursori alle frequenze delle bande.
+     * Le campane vicine si sommano, quindi senza compensazione due bande a +6 dB danno più di
+     * +6 dB fra l'una e l'altra. Metodo: Newton con jacobiano numerico, passo smorzato (ridge) per
+     * non esplodere quando le bande sono molto sovrapposte; i guadagni restano entro +-GAIN_RANGE.
+     */
+    fun fitGains(cfg: EqConfig, fs: Double): List<Float> {
+        val key = FitKey(fs, cfg.freqs, cfg.qs, cfg.types, cfg.gains)
+        fitCache?.let { if (it.first == key) return it.second }
+        val n = cfg.bandCount
+        val limit = fs * 0.45
+        val f = DoubleArray(n) { cfg.freqs[it].toDouble() }
+        val active = BooleanArray(n) { f[it] < limit }
+        val target = DoubleArray(n) { cfg.gains[it].toDouble() }
+        val g = target.copyOf()
+        val range = EqConfig.GAIN_RANGE.toDouble()
+        val h = 0.25
+        for (iter in 0 until 12) {
+            val coefs = Array(n) { j -> if (active[j]) bandCoef(cfg.typeAt(j), fs, f[j], cfg.qFor(j), g[j]) else IDENTITY }
+            val r = DoubleArray(n)
+            var worst = 0.0
+            for (i in 0 until n) {
+                if (!active[i]) continue
+                var tot = 0.0
+                for (j in 0 until n) tot += magnitudeDb(coefs[j], fs, f[i])
+                r[i] = target[i] - tot
+                worst = maxOf(worst, kotlin.math.abs(r[i]))
+            }
+            if (worst < 0.005) break
+            val jac = Array(n) { DoubleArray(n) }
+            for (j in 0 until n) {
+                if (!active[j]) continue
+                val cp = bandCoef(cfg.typeAt(j), fs, f[j], cfg.qFor(j), g[j] + h)
+                val cm = bandCoef(cfg.typeAt(j), fs, f[j], cfg.qFor(j), g[j] - h)
+                for (i in 0 until n) if (active[i]) jac[i][j] = (magnitudeDb(cp, fs, f[i]) - magnitudeDb(cm, fs, f[i])) / (2 * h)
+            }
+            // equazioni normali con ridge: (J'J + lambda I) d = J' r
+            val a = Array(n) { DoubleArray(n) }
+            val b = DoubleArray(n)
+            for (p in 0 until n) {
+                for (q in 0 until n) {
+                    var sum = 0.0
+                    for (i in 0 until n) sum += jac[i][p] * jac[i][q]
+                    a[p][q] = sum
+                }
+                a[p][p] += 1e-3
+                var sb = 0.0
+                for (i in 0 until n) sb += jac[i][p] * r[i]
+                b[p] = sb
+            }
+            val d = solve(a, b) ?: break
+            for (j in 0 until n) {
+                if (!active[j]) continue
+                g[j] = (g[j] + d[j].coerceIn(-6.0, 6.0)).coerceIn(-range, range)
+            }
+        }
+        val result = List(n) { g[it].toFloat() }
+        fitCache = key to result
+        return result
+    }
 
     // ---- Progetto dei filtri
     //
@@ -495,15 +609,12 @@ object EqMath {
         val nyquistLimit = fs * 0.45
         val out = ArrayList<Coef>(stageCount(cfg.bandCount))
         out.addAll(bassStages(cfg, fs))
+        val gains = cfg.effectiveGains(fs)
         for (i in 0 until cfg.bandCount) {
             val f = cfg.freqs[i].toDouble()
             out.add(
-                if (cfg.enabled && f < nyquistLimit)
-                    when (cfg.typeAt(i)) {
-                        0 -> lowShelf(fs, f, cfg.gains[i].toDouble())
-                        1 -> highShelf(fs, f, cfg.gains[i].toDouble())
-                        else -> peaking(fs, f, cfg.qFor(i), cfg.gains[i].toDouble())
-                    } else IDENTITY
+                if (cfg.enabled && f < nyquistLimit) bandCoef(cfg.typeAt(i), fs, f, cfg.qFor(i), gains[i].toDouble())
+                else IDENTITY
             )
         }
         out.addAll(trebleStages(cfg, fs))

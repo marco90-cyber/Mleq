@@ -300,6 +300,9 @@ fun EqualizerScreen(env: AppEnv) {
                                 settings.updateEq { c -> c.copy(gains = List(c.bandCount) { 0f }, preampDb = 0f) }
                                 moreMenu = false
                             }
+                            MenuRow(if (eq.faithful) "Curva fedele: attiva" else "Curva fedele: spenta") {
+                                settings.updateEq { it.copy(faithful = !it.faithful) }; moreMenu = false
+                            }
                             MenuRow("Q automatico") { settings.updateEq { it.withAutoQ() }; moreMenu = false }
                             MenuRow("Salva come preimpostazione") { saveName = ""; saveDialog = true; moreMenu = false }
                             MenuRow("Analizzatore") { env.overlay = Overlay.Analyzer; moreMenu = false }
