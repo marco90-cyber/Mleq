@@ -243,5 +243,58 @@ class EqMathTest {
         val soft = EqMath.lowShelf(fs, 200.0, 8.0, 0.75)
         assertTrue(EqMath.magnitudeDb(soft, fs, 400.0) > EqMath.magnitudeDb(a, fs, 400.0))
     }
-}
 
+    /** Curva analogica ideale di un peaking (prototipo del Cookbook) in dB a f/f0 = x. */
+    private fun idealPeakingDb(gainDb: Double, q: Double, x: Double): Double {
+        val a = Math.pow(10.0, gainDb / 40.0)
+        val re = 1.0 - x * x
+        return 20.0 * Math.log10(Math.hypot(re, x * a / q) / Math.hypot(re, x / (a * q)))
+    }
+
+    private fun worstPeakingError(fs: Double, f0: Double, q: Double, g: Double): Double {
+        val c = EqMath.peaking(fs, f0, q, g)
+        var worst = 0.0
+        for (i in 0 until 200) {
+            val f = 20.0 * Math.pow(0.45 * fs / 20.0, i / 199.0)
+            worst = maxOf(worst, abs(EqMath.magnitudeDb(c, fs, f) - idealPeakingDb(g, q, f / f0)))
+        }
+        return worst
+    }
+
+    @Test
+    fun peakingTracksTheAnalogCurveNearNyquist() {
+        // il progetto classico sbaglia di 7,9 dB (16 kHz, Q1, +12 dB a 44,1 kHz) e 6,1 dB (Q3, -12 dB)
+        assertTrue(worstPeakingError(44100.0, 16000.0, 1.0, 12.0) < 3.0)
+        assertTrue(worstPeakingError(44100.0, 16000.0, 3.0, -12.0) < 3.0)
+        assertTrue(worstPeakingError(48000.0, 12000.0, 2.0, 9.0) < 2.0)
+    }
+
+    @Test
+    fun cutIsTheExactInverseOfTheBoost() {
+        val fs = 44100.0
+        val up = EqMath.peaking(fs, 14000.0, 1.5, 9.0)
+        val down = EqMath.peaking(fs, 14000.0, 1.5, -9.0)
+        for (f in listOf(100.0, 3000.0, 9000.0, 14000.0, 19000.0)) {
+            assertEquals(0.0, EqMath.magnitudeDb(up, fs, f) + EqMath.magnitudeDb(down, fs, f), 0.05)
+        }
+    }
+
+    @Test
+    fun filtersStayStableAtAnySettingAndRate() {
+        for (fs in listOf(44100.0, 48000.0, 96000.0, 192000.0)) {
+            for (f in listOf(40.0, 500.0, 5000.0, 12000.0, 16000.0, 20000.0)) {
+                if (f >= fs * 0.45) continue
+                for (g in listOf(-15.0, -6.0, 6.0, 15.0)) {
+                    val all = listOf(
+                        EqMath.peaking(fs, f, 0.4, g), EqMath.peaking(fs, f, 8.0, g),
+                        EqMath.lowShelf(fs, f, g), EqMath.highShelf(fs, f, g, 0.75),
+                    )
+                    for (c in all) {
+                        assertTrue(c.a2 > -1.0 && c.a2 < 1.0 && abs(c.a1) < 1.0 + c.a2)
+                        assertTrue(c.b0.isFinite() && c.b1.isFinite() && c.b2.isFinite())
+                    }
+                }
+            }
+        }
+    }
+}

@@ -4,6 +4,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.cosh
+import kotlin.math.exp
+import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.pow
@@ -290,7 +293,7 @@ object EqPresets {
     )
 }
 
-/** Matematica dei filtri biquad (formule dell'Audio EQ Cookbook). */
+/** Matematica dei filtri biquad (Audio EQ Cookbook + variante matched, vedi sotto). */
 object EqMath {
     /** Coefficienti normalizzati: b0, b1, b2, a1, a2. */
     class Coef(val b0: Double, val b1: Double, val b2: Double, val a1: Double, val a2: Double)
@@ -300,8 +303,88 @@ object EqMath {
     private fun norm(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) =
         Coef(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
 
-    fun peaking(fs: Double, f: Double, q: Double, gainDb: Double): Coef {
-        if (kotlin.math.abs(gainDb) < 0.01) return IDENTITY
+    // ---- Progetto dei filtri
+    //
+    // Per ogni filtro si calcolano due candidati: la forma classica dell'Audio EQ Cookbook (RBJ) e
+    // una forma "matched" (poli dal matched-z, zeri imposti con tre vincoli di modulo a DC, f0 e
+    // Nyquist, come nella letteratura sui filtri digitali che imitano il prototipo analogico).
+    // Vince il candidato con l'errore massimo minore rispetto alla curva analogica ideale
+    // (20 Hz .. 0,45*fs). Così non peggiora mai: vicino a Nyquist il RBJ "si schiaccia" fino a 8 dB.
+
+    private const val ERR_POINTS = 48
+
+    /** Modulo del prototipo analogico a f/f0 = x per il rinforzo A (A<1 = taglio). */
+    private fun analogPeaking(a: Double, q: Double, x: Double): Double {
+        val re = 1.0 - x * x
+        val n = hypot(re, x * a / q)
+        val d = hypot(re, x / (a * q))
+        return n / d
+    }
+
+    private fun analogShelf(a: Double, invQ: Double, low: Boolean, x: Double): Double {
+        val rq = sqrt(a) * invQ * x
+        val x2 = x * x
+        return if (low) a * hypot(a - x2, rq) / hypot(1.0 - a * x2, rq)
+        else a * hypot(1.0 - a * x2, rq) / hypot(a - x2, rq)
+    }
+
+    private fun maxErrDb(c: Coef, fs: Double, f0: Double, analog: (Double) -> Double): Double {
+        var worst = 0.0
+        val top = fs * 0.45
+        for (i in 0 until ERR_POINTS) {
+            val f = 20.0 * (top / 20.0).pow(i.toDouble() / (ERR_POINTS - 1))
+            val ref = 20.0 * log10(analog(f / f0))
+            val d = magnitudeDb(c, fs, f)
+            worst = maxOf(worst, kotlin.math.abs(d - ref))
+        }
+        return worst
+    }
+
+    private fun isStable(c: Coef): Boolean =
+        c.b0.isFinite() && c.b1.isFinite() && c.b2.isFinite() && c.a1.isFinite() && c.a2.isFinite() &&
+            kotlin.math.abs(c.a2) < 1.0 && kotlin.math.abs(c.a1) < 1.0 + c.a2
+
+    private fun invert(c: Coef) = Coef(1.0 / c.b0, c.a1 / c.b0, c.a2 / c.b0, c.b1 / c.b0, c.b2 / c.b0)
+
+    /** Filtro "matched" per un rinforzo (A >= 1). Null se non realizzabile. */
+    private fun matched(fs: Double, f0: Double, zeta: Double, wpRatio: Double, analog: (Double) -> Double): Coef? {
+        val w0 = 2.0 * PI * f0 / fs
+        val th = wpRatio * w0
+        val e = exp(-zeta * th)
+        val a1 = if (zeta < 1.0) -2.0 * e * cos(sqrt(1.0 - zeta * zeta) * th)
+        else -2.0 * e * cosh(sqrt(zeta * zeta - 1.0) * th)
+        val a2 = e * e
+        val ca0 = (1.0 + a1 + a2).let { it * it }
+        val ca1 = (1.0 - a1 + a2).let { it * it }
+        val ca2 = -4.0 * a2
+        fun phi1(w: Double) = sin(w / 2.0).let { it * it }
+        val pc1 = phi1(w0)
+        val pc0 = 1.0 - pc1
+        val pc2 = 4.0 * pc0 * pc1
+        val aw0 = ca0 * pc0 + ca1 * pc1 + ca2 * pc2
+        val m0 = analog(0.0).let { it * it }
+        val mc = analog(1.0).let { it * it }
+        val mn = analog(PI / w0).let { it * it }
+        val bb0 = ca0 * m0
+        val bb1 = ca1 * mn
+        val bb2 = (aw0 * mc - bb0 * pc0 - bb1 * pc1) / pc2
+        if (!(bb0 > 0.0 && bb1 > 0.0)) return null
+        val s0 = sqrt(bb0)
+        val s1 = sqrt(bb1)
+        val w = 0.5 * (s0 + s1)
+        val disc = w * w + bb2
+        if (!(disc >= 0.0)) return null
+        val b0 = 0.5 * (w + sqrt(disc))
+        val c = Coef(b0, 0.5 * (s0 - s1), w - b0, a1, a2)
+        return if (isStable(c)) c else null
+    }
+
+    private fun pickBest(fs: Double, f0: Double, rbj: Coef, m: Coef?, analog: (Double) -> Double): Coef {
+        if (m == null) return rbj
+        return if (maxErrDb(m, fs, f0, analog) < maxErrDb(rbj, fs, f0, analog) - 1e-6) m else rbj
+    }
+
+    private fun rbjPeaking(fs: Double, f: Double, q: Double, gainDb: Double): Coef {
         val a = 10.0.pow(gainDb / 40.0)
         val w0 = 2.0 * PI * f / fs
         val alpha = sin(w0) / (2.0 * q)
@@ -312,35 +395,31 @@ object EqMath {
         )
     }
 
-    /**
-     * [slope] = parametro S dell'Audio EQ Cookbook: 1 = pendenza massima senza sovraelongazione
-     * (valore storico), sotto 1 la transizione è più dolce e larga.
-     */
-    fun lowShelf(fs: Double, f: Double, gainDb: Double, slope: Double = 1.0): Coef {
+    fun peaking(fs: Double, f: Double, q: Double, gainDb: Double): Coef {
         if (kotlin.math.abs(gainDb) < 0.01) return IDENTITY
+        val rbj = rbjPeaking(fs, f, q, gainDb)
+        val a = 10.0.pow(gainDb / 40.0)
+        val g = kotlin.math.abs(gainDb)
+        val ab = 10.0.pow(g / 40.0)
+        val boost = matched(fs, f, 1.0 / (2.0 * ab * q), 1.0) { x -> analogPeaking(ab, q, x) }
+        val m = if (gainDb < 0.0) boost?.let { invert(it) } else boost
+        return pickBest(fs, f, rbj, m) { x -> analogPeaking(a, q, x) }
+    }
+
+    private fun rbjShelf(fs: Double, f: Double, gainDb: Double, slope: Double, low: Boolean): Coef {
         val a = 10.0.pow(gainDb / 40.0)
         val w0 = 2.0 * PI * f / fs
         val c = cos(w0)
         val alpha = sin(w0) / 2.0 * sqrt((a + 1.0 / a) * (1.0 / slope - 1.0) + 2.0)
         val sa = 2.0 * sqrt(a) * alpha
-        return norm(
+        return if (low) norm(
             a * ((a + 1) - (a - 1) * c + sa),
             2.0 * a * ((a - 1) - (a + 1) * c),
             a * ((a + 1) - (a - 1) * c - sa),
             (a + 1) + (a - 1) * c + sa,
             -2.0 * ((a - 1) + (a + 1) * c),
             (a + 1) + (a - 1) * c - sa
-        )
-    }
-
-    fun highShelf(fs: Double, f: Double, gainDb: Double, slope: Double = 1.0): Coef {
-        if (kotlin.math.abs(gainDb) < 0.01) return IDENTITY
-        val a = 10.0.pow(gainDb / 40.0)
-        val w0 = 2.0 * PI * f / fs
-        val c = cos(w0)
-        val alpha = sin(w0) / 2.0 * sqrt((a + 1.0 / a) * (1.0 / slope - 1.0) + 2.0)
-        val sa = 2.0 * sqrt(a) * alpha
-        return norm(
+        ) else norm(
             a * ((a + 1) + (a - 1) * c + sa),
             -2.0 * a * ((a - 1) + (a + 1) * c),
             a * ((a + 1) + (a - 1) * c - sa),
@@ -349,6 +428,29 @@ object EqMath {
             (a + 1) - (a - 1) * c - sa
         )
     }
+
+    private fun shelf(fs: Double, f: Double, gainDb: Double, slope: Double, low: Boolean): Coef {
+        if (kotlin.math.abs(gainDb) < 0.01) return IDENTITY
+        val rbj = rbjShelf(fs, f, gainDb, slope, low)
+        val a = 10.0.pow(gainDb / 40.0)
+        val ab = 10.0.pow(kotlin.math.abs(gainDb) / 40.0)
+        val invQ = sqrt((ab + 1.0 / ab) * (1.0 / slope - 1.0) + 2.0)
+        val wp = if (low) 1.0 / sqrt(ab) else sqrt(ab)
+        val boost = matched(fs, f, invQ / 2.0, wp) { x -> analogShelf(ab, invQ, low, x) }
+        val m = if (gainDb < 0.0) boost?.let { invert(it) } else boost
+        val invQa = sqrt((a + 1.0 / a) * (1.0 / slope - 1.0) + 2.0)
+        return pickBest(fs, f, rbj, m) { x -> analogShelf(a, invQa, low, x) }
+    }
+
+    /**
+     * [slope] = parametro S dell'Audio EQ Cookbook: 1 = pendenza massima senza sovraelongazione
+     * (valore storico), sotto 1 la transizione è più dolce e larga.
+     */
+    fun lowShelf(fs: Double, f: Double, gainDb: Double, slope: Double = 1.0): Coef =
+        shelf(fs, f, gainDb, slope, true)
+
+    fun highShelf(fs: Double, f: Double, gainDb: Double, slope: Double = 1.0): Coef =
+        shelf(fs, f, gainDb, slope, false)
 
     /** Posizione delle manopole -> dB (0..100, 50 = 0 dB, estremi = -12 / +12 dB). */
     /** Manopole Bassi/Alti: 0..100 = 0..+10 dB (solo rinforzo). */
