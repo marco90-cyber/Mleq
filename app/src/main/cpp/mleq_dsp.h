@@ -53,7 +53,10 @@ public:
         hist_.assign(static_cast<size_t>(kTpTaps) * ch_, 0.0f);
         histPos_ = 0;
         rRing_.assign(L_, 1.0f);
-        dqCap_ = L_ + 1;
+        // finestra del minimo = look-ahead + tenuta: il gain non risale dentro mezzo periodo dei
+        // bassi profondi (senza tenuta il limiter "segue" la forma d'onda e la distorce)
+        W_ = L_ + std::max(1, static_cast<int>(kHoldMs * 0.001 * sr_));
+        dqCap_ = W_ + 1;
         dqIdx_.assign(dqCap_, 0);
         dqVal_.assign(dqCap_, 1.0f);
         setParams(thresholdDb_, releaseMs_);
@@ -98,7 +101,7 @@ public:
             dqIdx_[tail_ % dqCap_] = n_;
             dqVal_[tail_ % dqCap_] = need;
             tail_++;
-            while (dqIdx_[head_ % dqCap_] <= n_ - L_) head_++;
+            while (dqIdx_[head_ % dqCap_] <= n_ - W_) head_++;
             const float mn = dqVal_[head_ % dqCap_];
 
             // rilascio: scende subito, risale esponenzialmente (sempre <= mn)
@@ -190,6 +193,8 @@ private:
         return peak;
     }
 
+    static constexpr float kHoldMs = 15.0f;          // tenuta: mezzo periodo di ~33 Hz
+    int W_ = 220;
     std::vector<float> hist_;
     int histPos_ = 0;
     int DL_ = 220 + kTpHalf;
@@ -255,7 +260,18 @@ public:
         limiterOn_ = on;
     }
 
+    /**
+     * Immagine stereo (solo 2 canali): [balance] -1..1 (attenua il lato opposto, mai rinforza),
+     * [width] 0..2 (0 = mono, 1 = invariato, 2 = doppio). Sopra 1 l'allargamento agisce solo
+     * sopra ~150 Hz: i bassi restano al centro (niente bassi "vuoti" o fuori fase).
+     */
+    void setStereo(float balance, float width) {
+        balT_ = std::min(1.0, std::max(-1.0, static_cast<double>(balance)));
+        widthT_ = std::min(2.0, std::max(0.0, static_cast<double>(width)));
+    }
+
     void reset() {
+        stLow_ = 0.0;
         std::fill(state_.begin(), state_.end(), 0.0);
         cur_ = coef_;
         preCur_ = pre_;
@@ -446,6 +462,8 @@ private:
         }
         rampLeft_ -= nr;
 
+        runStereo(w, frames);
+
         bool bad = false;
         float* dst = scratch_.data();
         for (size_t i = 0; i < n; i++) {
@@ -453,6 +471,35 @@ private:
             if (!std::isfinite(v)) { bad = true; dst[i] = 0.0f; } else dst[i] = static_cast<float>(v);
         }
         if (bad) std::fill(state_.begin(), state_.end(), 0.0);  // filtro instabile: riparti da zero
+    }
+
+    void runStereo(double* w, int frames) {
+        if (ch_ != 2) return;
+        const double lgT = balT_ > 0.0 ? 1.0 - balT_ : 1.0;
+        const double rgT = balT_ < 0.0 ? 1.0 + balT_ : 1.0;
+        const bool settled = lg_ == lgT && rg_ == rgT && wid_ == widthT_;
+        if (settled && lgT == 1.0 && rgT == 1.0 && widthT_ == 1.0) { stLow_ = 0.0; return; }
+        const double k = 1.0 - std::exp(-1.0 / (0.02 * sr_));          // ~20 ms: niente scatti
+        const double aLp = 1.0 - std::exp(-2.0 * 3.14159265358979323846 * 150.0 / sr_);
+        for (int f = 0; f < frames; f++) {
+            if (!settled) {
+                lg_ += k * (lgT - lg_); rg_ += k * (rgT - rg_); wid_ += k * (widthT_ - wid_);
+            }
+            double& l = w[static_cast<size_t>(f) * 2];
+            double& r = w[static_cast<size_t>(f) * 2 + 1];
+            const double m = 0.5 * (l + r);
+            const double sd = 0.5 * (l - r);
+            stLow_ += aLp * (sd - stLow_);              // parte bassa del laterale
+            const double hi = sd - stLow_;              // somma esatta: low + hi = sd
+            const double wl = wid_ < 1.0 ? wid_ : 1.0;
+            const double s2 = wl * stLow_ + wid_ * hi;
+            l = (m + s2) * lg_;
+            r = (m - s2) * rg_;
+        }
+        if (!settled && std::fabs(lg_ - lgT) < 1e-6 && std::fabs(rg_ - rgT) < 1e-6 && std::fabs(wid_ - widthT_) < 1e-6) {
+            lg_ = lgT; rg_ = rgT; wid_ = widthT_;
+        }
+        if (!std::isfinite(stLow_)) stLow_ = 0.0;
     }
 
     void encode(uint8_t* out, int outEnc, const float* s, size_t n, bool dither) {
@@ -501,6 +548,7 @@ private:
     bool limiterOn_ = false, limiterReady_ = false;
     float thrDb_ = -0.5f, relMs_ = 80.0f, lookaheadMs_ = 5.0f;
     uint32_t rng_ = 2463534242u;
+    double balT_ = 0.0, widthT_ = 1.0, lg_ = 1.0, rg_ = 1.0, wid_ = 1.0, stLow_ = 0.0;
 };
 
 }  // namespace mleq

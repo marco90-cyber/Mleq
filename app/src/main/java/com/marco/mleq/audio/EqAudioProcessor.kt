@@ -144,6 +144,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
         val preGain = 10.0.pow(preDbEff / 20.0)
         stageCount = list.size
         dsp.setFilters(flat, list.size, preGain)
+        dsp.setStereo(cfg.balanceFactor(), cfg.widthFactor())
 
         val active = cfg.dspActive()
         bypass = !active

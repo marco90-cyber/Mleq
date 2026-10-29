@@ -24,6 +24,11 @@ class NativeDsp {
         if (handle != 0L) nSetLimiter(handle, on, thresholdDb, releaseMs, lookaheadMs)
     }
 
+    /** [balance] -1..1, [width] 0..2 (0 = mono). */
+    fun setStereo(balance: Float, width: Float) {
+        if (handle != 0L) nSetStereo(handle, balance, width)
+    }
+
     fun reset() {
         if (handle != 0L) nReset(handle)
     }
@@ -62,6 +67,7 @@ class NativeDsp {
     private external fun nConfigure(h: Long, sr: Int, ch: Int)
     private external fun nSetFilters(h: Long, coefs: DoubleArray, stages: Int, preGain: Double)
     private external fun nSetLimiter(h: Long, on: Boolean, thr: Float, rel: Float, look: Float)
+    private external fun nSetStereo(h: Long, bal: Float, width: Float)
     private external fun nReset(h: Long)
     private external fun nSetResample(h: Long, outRate: Int)
     private external fun nMaxOut(h: Long, inFrames: Int): Int

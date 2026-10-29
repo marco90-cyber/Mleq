@@ -44,6 +44,17 @@ data class EqConfig(
      * campane vicine (vedi [EqMath.fitGains]).
      */
     val faithful: Boolean = false,
+    /**
+     * Headroom delle manopole: abbassa il livello di quanto rinforzano Bassi/Alti, così il
+     * rinforzo non finisce nel limiter (anche con l'equalizzatore spento).
+     */
+    val toneHeadroom: Boolean = true,
+    /** Bilanciamento -100 (tutto a sinistra) .. +100 (tutto a destra). */
+    val balance: Int = 0,
+    /** Espansione stereo in %: 0 = mono, 100 = invariata, 200 = doppia. */
+    val stereoWidth: Int = 100,
+    /** Uscita mono (somma dei canali). */
+    val mono: Boolean = false,
     /** Soglia del limiter in dBFS (-12..0). */
     val limiterThresholdDb: Float = -0.5f,
     /** Rilascio del limiter in ms (20..500). */
@@ -126,20 +137,70 @@ data class EqConfig(
         return peak
     }
 
-    /** Preamp effettivo in dB: preamp scelto meno l'headroom automatico (se attivo). */
-    fun effectivePreampDb(fs: Double): Double =
-        if (!enabled) 0.0 else preampDb - (if (autoHeadroom) boostPeakDb(fs) else 0.0)
+    /** Picco del solo rinforzo delle manopole (dB, >= 0). */
+    fun tonePeakDb(fs: Double = 48000.0): Double {
+        if (bassPercent == 0 && treblePercent == 0) return 0.0
+        return EqMath.cachedTonePeak(this, fs) { computeTonePeak(fs) }
+    }
+
+    private fun computeTonePeak(fs: Double): Double {
+        var peak = 0.0
+        for (i in 0 until 256) {
+            val f = 20.0 * (20000.0 / 20.0).pow(i / 255.0)
+            val t = toneResponseDb(f, fs)
+            if (t > peak) peak = t
+        }
+        return peak
+    }
+
+    /**
+     * Preamp effettivo in dB: preamp scelto (solo con EQ acceso) meno l'headroom.
+     * Con auto-headroom e EQ acceso si compensa tutto il rinforzo (bande + manopole);
+     * altrimenti, se attivo, solo quello delle manopole.
+     */
+    fun effectivePreampDb(fs: Double): Double = EqMath.cachedPreamp(this, fs) {
+        val manual = if (enabled) preampDb.toDouble() else 0.0
+        val head = when {
+            enabled && autoHeadroom -> boostPeakDb(fs)
+            toneHeadroom -> tonePeakDb(fs)
+            else -> 0.0
+        }
+        manual - head - (if (toneHeadroom) widthHeadroomDb() else 0.0)
+    }
 
     /** True se serve elaborare l'audio (altrimenti bypass reale). */
     fun dspActive(): Boolean =
-        enabled || bassPercent != 0 || treblePercent != 0
+        enabled || bassPercent != 0 || treblePercent != 0 || stereoActive()
+
+    /** True se l'immagine stereo è diversa da quella originale. */
+    fun stereoActive(): Boolean = mono || balance != 0 || stereoWidth != 100
+
+    /** Larghezza effettiva per il DSP (0..2). */
+    fun widthFactor(): Float = if (mono) 0f else stereoWidth.coerceIn(0, 200) / 100f
+
+    /** Bilanciamento per il DSP (-1..1). */
+    fun balanceFactor(): Float = balance.coerceIn(-100, 100) / 100f
+
+    /**
+     * Allargare lo stereo rinforza il canale laterale: per un suono tutto su un lato il picco
+     * cresce di (1 + w) / 2. Con l'headroom attivo il livello scende di altrettanto.
+     */
+    fun widthHeadroomDb(): Double {
+        val w = widthFactor().toDouble()
+        return if (w > 1.0) 20.0 * log10((1.0 + w) / 2.0) else 0.0
+    }
 
     /** Risposta in dB a una certa frequenza (per il grafico). */
     fun responseDb(f: Double, fs: Double = 48000.0, includeTone: Boolean = true): Double {
         var total = 0.0
         for (c in EqMath.stages(this, fs)) total += EqMath.magnitudeDb(c, fs, f)
-        if (enabled) total += preampDb - (if (autoHeadroom) boostPeakDb(fs) else 0.0)
-        if (!includeTone) total -= toneResponseDb(f, fs)
+        total += effectivePreampDb(fs)
+        if (!includeTone) {
+            total -= toneResponseDb(f, fs)
+            // la curva dell'EQ non deve "scendere" quando si girano le manopole
+            if (!(enabled && autoHeadroom) && toneHeadroom) total += tonePeakDb(fs)
+            if (toneHeadroom) total += widthHeadroomDb()
+        }
         return total
     }
 
@@ -163,6 +224,10 @@ data class EqConfig(
         o.put("limiter", limiterOn)
         o.put("autoHeadroom", autoHeadroom)
         o.put("faithful", faithful)
+        o.put("toneHeadroom", toneHeadroom)
+        o.put("balance", balance)
+        o.put("width", stereoWidth)
+        o.put("mono", mono)
         o.put("limThr", limiterThresholdDb.toDouble())
         o.put("limRel", limiterReleaseMs.toDouble())
         o.put("preamp", preampDb.toDouble())
@@ -284,6 +349,10 @@ data class EqConfig(
                     limiterOn = o.optBoolean("limiter", true),
                     autoHeadroom = o.optBoolean("autoHeadroom", false),
                     faithful = o.optBoolean("faithful", false),
+                    toneHeadroom = o.optBoolean("toneHeadroom", true),
+                    balance = o.optInt("balance", 0).coerceIn(-100, 100),
+                    stereoWidth = o.optInt("width", 100).coerceIn(0, 200),
+                    mono = o.optBoolean("mono", false),
                     limiterThresholdDb = o.optDouble("limThr", -0.5).toFloat().coerceIn(-12f, 0f),
                     limiterReleaseMs = o.optDouble("limRel", 80.0).toFloat().coerceIn(20f, 500f),
                 )
@@ -325,6 +394,29 @@ object EqMath {
 
     private fun norm(b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) =
         Coef(b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
+
+    @Volatile
+    private var preampCache: Triple<EqConfig, Double, Double>? = null
+
+    /** Il calcolo dell'headroom costa centinaia di risposte: il grafico lo chiede per ogni punto. */
+    fun cachedPreamp(cfg: EqConfig, fs: Double, compute: () -> Double): Double {
+        preampCache?.let { if (it.second == fs && it.first == cfg) return it.third }
+        val v = compute()
+        preampCache = Triple(cfg, fs, v)
+        return v
+    }
+
+    @Volatile
+    private var toneCache: Triple<List<Any>, Double, Double>? = null
+
+    fun cachedTonePeak(cfg: EqConfig, fs: Double, compute: () -> Double): Double {
+        // dipende solo dalle manopole
+        val key = listOf<Any>(cfg.bassPercent, cfg.treblePercent, cfg.bassFreq, cfg.trebleFreq)
+        toneCache?.let { if (it.first == key && it.second == fs) return it.third }
+        val v = compute()
+        toneCache = Triple(key, fs, v)
+        return v
+    }
 
     private fun bandCoef(type: Int, fs: Double, f: Double, q: Double, g: Double): Coef = when (type) {
         0 -> lowShelf(fs, f, g)

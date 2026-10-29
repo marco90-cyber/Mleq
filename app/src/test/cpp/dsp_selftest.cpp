@@ -310,6 +310,66 @@ static void testTruePeak() {
     }
 }
 
+static void testBassHold() {
+    // 40 Hz oltre soglia: senza tenuta il gain risale dentro il semiperiodo e distorce
+    Engine e; e.configure(44100, 2); e.setLimiter(true, -1.0f, 80.0f, 5.0f);
+    const int N = 44100 * 3;
+    std::vector<float> in(static_cast<size_t>(N) * 2), out;
+    for (int i = 0; i < N; i++) { const float v = static_cast<float>(2.0 * std::sin(2 * kPi * 40.0 * i / 44100.0)); in[2 * i] = v; in[2 * i + 1] = v; }
+    runFloat(e, in, out, N);
+    const int a = 44100;
+    double sc = 0, cc = 0;
+    for (int i = a; i < N; i++) { const double t = 2 * kPi * 40.0 * i / 44100.0; sc += out[2 * i] * std::sin(t); cc += out[2 * i] * std::cos(t); }
+    sc *= 2.0 / (N - a); cc *= 2.0 / (N - a);
+    double res = 0, sig = 0;
+    for (int i = a; i < N; i++) { const double t = 2 * kPi * 40.0 * i / 44100.0; const double fit = sc * std::sin(t) + cc * std::cos(t); res += (out[2 * i] - fit) * (out[2 * i] - fit); sig += fit * fit; }
+    const double thd = 100 * std::sqrt(res / sig);
+    char msg[160];
+    std::snprintf(msg, sizeof msg, "limiter: 40 Hz +6 dB oltre soglia senza distorsione (THD+N %.3f%%, prima 0,245%%)", thd);
+    CHECK(thd < 0.02, msg);
+}
+
+static void testStereo() {
+    const int N = 44100;
+    std::vector<float> in(static_cast<size_t>(N) * 2), out;
+    for (int i = 0; i < N; i++) {
+        in[2 * i] = static_cast<float>(0.5 * std::sin(2 * kPi * 1000.0 * i / 44100.0));
+        in[2 * i + 1] = static_cast<float>(0.2 * std::sin(2 * kPi * 3000.0 * i / 44100.0));
+    }
+    {   // mono: canali identici
+        Engine e; e.configure(44100, 2); e.setStereo(0.0f, 0.0f);
+        runFloat(e, in, out, N);
+        double d = 0; for (int i = 22050; i < N; i++) d = std::max(d, (double)std::fabs(out[2 * i] - out[2 * i + 1]));
+        CHECK(d < 1e-6, "stereo: mono = canali identici");
+    }
+    {   // neutro: uscita identica
+        Engine e; e.configure(44100, 2); e.setStereo(0.0f, 1.0f);
+        runFloat(e, in, out, N);
+        CHECK(in == out, "stereo: neutro = uscita identica all'ingresso");
+    }
+    {   // bilanciamento tutto a destra: sinistro muto, destro invariato
+        Engine e; e.configure(44100, 2); e.setStereo(1.0f, 1.0f);
+        runFloat(e, in, out, N);
+        double l = 0, r = 0; for (int i = 22050; i < N; i++) { l = std::max(l, (double)std::fabs(out[2 * i])); r = std::max(r, (double)std::fabs(out[2 * i + 1] - in[2 * i + 1])); }
+        CHECK(l < 1e-4 && r < 1e-4, "stereo: bilanciamento a destra (sinistro muto, destro invariato)");
+    }
+    {   // espansione x2: laterale acuto raddoppiato, laterale basso (40 Hz) quasi invariato
+        auto sideGain = [](double f) {
+            Engine e; e.configure(44100, 2); e.setStereo(0.0f, 2.0f);
+            const int M = 44100 * 2;
+            std::vector<float> x(static_cast<size_t>(M) * 2), y;
+            for (int i = 0; i < M; i++) { const float v = static_cast<float>(0.2 * std::sin(2 * kPi * f * i / 44100.0)); x[2 * i] = v; x[2 * i + 1] = -v; }
+            runFloat(e, x, y, M);
+            double a = 0, b = 0; for (int i = M / 2; i < M; i++) { a += y[2 * i] * y[2 * i]; b += x[2 * i] * x[2 * i]; }
+            return 20 * std::log10(std::sqrt(a / b));
+        };
+        const double hi = sideGain(5000.0), lo = sideGain(40.0);
+        char msg[160];
+        std::snprintf(msg, sizeof msg, "stereo: espansione x2 = +%.2f dB sul laterale a 5 kHz, +%.2f dB a 40 Hz (bassi al centro)", hi, lo);
+        CHECK(std::fabs(hi - 6.02) < 0.1 && lo < 1.5, msg);
+    }
+}
+
 int main() {
     testResample();
     testBypassBitExact();
@@ -317,6 +377,8 @@ int main() {
     testFilterGain();
     testLimiter();
     testTruePeak();
+    testBassHold();
+    testStereo();
     testFlushAndLongRun();
     testStability();
     testChannels();

@@ -112,7 +112,7 @@ class EqMathTest {
 
     @Test
     fun toneKnobsWorkEvenWhenEqIsOff() {
-        val cfg = EqConfig(enabled = false, bassPercent = 100)
+        val cfg = EqConfig(enabled = false, bassPercent = 100, toneHeadroom = false)
         assertTrue(cfg.dspActive())
         assertTrue(cfg.responseDb(40.0, 48000.0) > 5.0)
     }
@@ -342,5 +342,49 @@ class EqMathTest {
         assertEquals(cfg, cfg.withType(99, 0))
         assertEquals(EqConfig.GAIN_RANGE, cfg.withPreamp(40f).preampDb, 0f)
         assertEquals(-EqConfig.GAIN_RANGE, cfg.withPreamp(-40f).preampDb, 0f)
+    }
+
+    @Test
+    fun toneHeadroomKeepsTheBoostOutOfTheLimiterEvenWithEqOff() {
+        val fs = 48000.0
+        val cfg = EqConfig(enabled = false, bassPercent = 100, treblePercent = 100)
+        val peak = cfg.tonePeakDb(fs)
+        assertTrue("rinforzo atteso > 9 dB: $peak", peak > 9.0)
+        assertEquals(-peak, cfg.effectivePreampDb(fs), 1e-9)
+        var top = -100.0
+        for (i in 0 until 200) top = maxOf(top, cfg.responseDb(20.0 * Math.pow(1000.0, i / 199.0), fs))
+        assertTrue("picco totale atteso ~0 dB: $top", top <= 0.05 && top > -0.5)
+        // spento: nessun headroom
+        assertEquals(0.0, cfg.copy(toneHeadroom = false).effectivePreampDb(fs), 1e-9)
+        // manopole a zero: nessun abbassamento
+        assertEquals(0.0, EqConfig().effectivePreampDb(fs), 1e-9)
+        // la curva dell'EQ (senza tono) non si sposta quando si girano le manopole
+        val eq = EqConfig(enabled = true).withGain(4, 3f)
+        val withKnobs = eq.copy(bassPercent = 80)
+        assertEquals(eq.responseDb(1000.0, fs, false), withKnobs.responseDb(1000.0, fs, false), 1e-6)
+    }
+
+    @Test
+    fun autoHeadroomWithEqOnStillCoversTheKnobs() {
+        val fs = 48000.0
+        val cfg = EqConfig(enabled = true, bassPercent = 100, autoHeadroom = true).withGain(0, 6f)
+        assertEquals(-cfg.boostPeakDb(fs), cfg.effectivePreampDb(fs), 1e-9)
+        assertTrue(cfg.boostPeakDb(fs) >= cfg.tonePeakDb(fs))
+    }
+
+    @Test
+    fun stereoSettingsActivateDspAndRoundTrip() {
+        val base = EqConfig()
+        assertFalse(base.dspActive())
+        assertTrue(base.copy(mono = true).dspActive())
+        assertTrue(base.copy(balance = -30).dspActive())
+        assertTrue(base.copy(stereoWidth = 150).dspActive())
+        assertEquals(0f, base.copy(mono = true, stereoWidth = 180).widthFactor(), 0f)
+        val c = base.copy(balance = 40, stereoWidth = 160, mono = true)
+        assertEquals(c, EqConfig.fromJson(c.toJson()))
+        // allargare abbassa il livello di (1 + w) / 2 con l'headroom attivo
+        val wide = base.copy(stereoWidth = 200)
+        assertEquals(-20 * Math.log10(1.5), wide.effectivePreampDb(48000.0), 1e-9)
+        assertEquals(0.0, wide.copy(toneHeadroom = false).effectivePreampDb(48000.0), 1e-9)
     }
 }
