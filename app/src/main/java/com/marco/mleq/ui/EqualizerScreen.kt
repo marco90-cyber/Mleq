@@ -662,11 +662,11 @@ private fun StereoPanel(env: AppEnv, eq: EqConfig) {
             )
             StereoKnob(
                 title = "Espansione",
-                valueText = if (eq.mono) "Mono" else "${eq.stereoWidth}%",
-                knob = eq.stereoWidth / 2, color = Accent,
+                valueText = if (eq.mono) "Mono" else "${eq.stereoExpand}%",
+                knob = eq.stereoExpand, color = Accent, zero = 0,
                 onTick = { env.feedback.tapScreen() }, onDetent = { env.feedback.detent() },
-                onChange = { v -> settings.updateEq { it.copy(stereoWidth = (v * 2).coerceIn(0, 200), mono = false) } },
-                onReset = { env.feedback.tapScreen(); settings.updateEq { it.copy(stereoWidth = 100) } },
+                onChange = { v -> settings.updateEq { it.copy(stereoExpand = v.coerceIn(0, 100), mono = false) } },
+                onReset = { env.feedback.tapScreen(); settings.updateEq { it.copy(stereoExpand = 0) } },
             )
         }
         Row(
@@ -686,6 +686,7 @@ private fun StereoKnob(
     valueText: String,
     knob: Int,
     color: Color,
+    zero: Int = 50,
     onTick: () -> Unit,
     onDetent: () -> Unit,
     onChange: (Int) -> Unit,
@@ -695,7 +696,7 @@ private fun StereoKnob(
         Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text(valueText, color = Color(0xFF9AA0AA), fontSize = 13.sp)
         Spacer(Modifier.height(4.dp))
-        Knob(value = knob, color = color, size = 68.dp, onTick = onTick, onDetent = onDetent, zero = 50, stepSize = 5, onChange = onChange)
+        Knob(value = knob, color = color, size = 68.dp, onTick = onTick, onDetent = onDetent, zero = zero, stepSize = 5, onChange = onChange)
         Spacer(Modifier.height(4.dp))
         Box(
             Modifier

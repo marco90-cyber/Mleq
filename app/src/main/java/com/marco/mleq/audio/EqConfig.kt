@@ -51,8 +51,8 @@ data class EqConfig(
     val toneHeadroom: Boolean = true,
     /** Bilanciamento -100 (tutto a sinistra) .. +100 (tutto a destra). */
     val balance: Int = 0,
-    /** Espansione stereo in %: 0 = mono, 100 = invariata, 200 = doppia. */
-    val stereoWidth: Int = 100,
+    /** Espansione stereo in %: 0 = stereo originale, 100 = massima (laterale x2 sopra ~150 Hz). */
+    val stereoExpand: Int = 0,
     /** Uscita mono (somma dei canali). */
     val mono: Boolean = false,
     /** ReplayGain: 0 = spento, 1 = brano, 2 = album (vedi [ReplayGain]). */
@@ -175,10 +175,10 @@ data class EqConfig(
         enabled || bassPercent != 0 || treblePercent != 0 || stereoActive()
 
     /** True se l'immagine stereo è diversa da quella originale. */
-    fun stereoActive(): Boolean = mono || balance != 0 || stereoWidth != 100
+    fun stereoActive(): Boolean = mono || balance != 0 || stereoExpand != 0
 
     /** Larghezza effettiva per il DSP (0..2). */
-    fun widthFactor(): Float = if (mono) 0f else stereoWidth.coerceIn(0, 200) / 100f
+    fun widthFactor(): Float = if (mono) 0f else 1f + stereoExpand.coerceIn(0, 100) / 100f
 
     /** Bilanciamento per il DSP (-1..1). */
     fun balanceFactor(): Float = balance.coerceIn(-100, 100) / 100f
@@ -228,7 +228,7 @@ data class EqConfig(
         o.put("faithful", faithful)
         o.put("toneHeadroom", toneHeadroom)
         o.put("balance", balance)
-        o.put("width", stereoWidth)
+        o.put("expand", stereoExpand)
         o.put("mono", mono)
         o.put("replayGain", replayGain)
         o.put("limThr", limiterThresholdDb.toDouble())
@@ -354,7 +354,9 @@ data class EqConfig(
                     faithful = o.optBoolean("faithful", false),
                     toneHeadroom = o.optBoolean("toneHeadroom", true),
                     balance = o.optInt("balance", 0).coerceIn(-100, 100),
-                    stereoWidth = o.optInt("width", 100).coerceIn(0, 200),
+                    // "width" = vecchio formato 0..200% (100 = neutro)
+                    stereoExpand = if (o.has("expand")) o.optInt("expand", 0).coerceIn(0, 100)
+                    else (o.optInt("width", 100) - 100).coerceIn(0, 100),
                     mono = o.optBoolean("mono", false),
                     replayGain = o.optInt("replayGain", ReplayGain.OFF).coerceIn(0, 2),
                     limiterThresholdDb = o.optDouble("limThr", -0.5).toFloat().coerceIn(-12f, 0f),

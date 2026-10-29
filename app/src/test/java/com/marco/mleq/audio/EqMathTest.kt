@@ -378,12 +378,16 @@ class EqMathTest {
         assertFalse(base.dspActive())
         assertTrue(base.copy(mono = true).dspActive())
         assertTrue(base.copy(balance = -30).dspActive())
-        assertTrue(base.copy(stereoWidth = 150).dspActive())
-        assertEquals(0f, base.copy(mono = true, stereoWidth = 180).widthFactor(), 0f)
-        val c = base.copy(balance = 40, stereoWidth = 160, mono = true)
+        assertTrue(base.copy(stereoExpand = 50).dspActive())
+        assertEquals(0f, base.copy(mono = true, stereoExpand = 80).widthFactor(), 0f)
+        val c = base.copy(balance = 40, stereoExpand = 60, mono = true)
         assertEquals(c, EqConfig.fromJson(c.toJson()))
         // allargare abbassa il livello di (1 + w) / 2 con l'headroom attivo
-        val wide = base.copy(stereoWidth = 200)
+        assertEquals(1.5f, base.copy(stereoExpand = 50).widthFactor(), 1e-6f)
+        // vecchio formato 0..200%: 160% -> espansione 60%, 80% -> nessuna espansione
+        assertEquals(60, EqConfig.fromJson("""{"width":160}""").stereoExpand)
+        assertEquals(0, EqConfig.fromJson("""{"width":80}""").stereoExpand)
+        val wide = base.copy(stereoExpand = 100)
         assertEquals(-20 * Math.log10(1.5), wide.effectivePreampDb(48000.0), 1e-9)
         assertEquals(0.0, wide.copy(toneHeadroom = false).effectivePreampDb(48000.0), 1e-9)
     }
