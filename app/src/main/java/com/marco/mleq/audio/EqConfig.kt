@@ -55,6 +55,8 @@ data class EqConfig(
     val stereoWidth: Int = 100,
     /** Uscita mono (somma dei canali). */
     val mono: Boolean = false,
+    /** ReplayGain: 0 = spento, 1 = brano, 2 = album (vedi [ReplayGain]). */
+    val replayGain: Int = ReplayGain.OFF,
     /** Soglia del limiter in dBFS (-12..0). */
     val limiterThresholdDb: Float = -0.5f,
     /** Rilascio del limiter in ms (20..500). */
@@ -228,6 +230,7 @@ data class EqConfig(
         o.put("balance", balance)
         o.put("width", stereoWidth)
         o.put("mono", mono)
+        o.put("replayGain", replayGain)
         o.put("limThr", limiterThresholdDb.toDouble())
         o.put("limRel", limiterReleaseMs.toDouble())
         o.put("preamp", preampDb.toDouble())
@@ -353,6 +356,7 @@ data class EqConfig(
                     balance = o.optInt("balance", 0).coerceIn(-100, 100),
                     stereoWidth = o.optInt("width", 100).coerceIn(0, 200),
                     mono = o.optBoolean("mono", false),
+                    replayGain = o.optInt("replayGain", ReplayGain.OFF).coerceIn(0, 2),
                     limiterThresholdDb = o.optDouble("limThr", -0.5).toFloat().coerceIn(-12f, 0f),
                     limiterReleaseMs = o.optDouble("limRel", 80.0).toFloat().coerceIn(20f, 500f),
                 )

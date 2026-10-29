@@ -20,6 +20,8 @@ data class DspInfo(
     val latencyMs: Float = 0f,
     val stages: Int = 0,
     val preampDb: Float = 0f,
+    /** Guadagno ReplayGain applicato (dB); null = tag assenti o funzione spenta. */
+    val replayGainDb: Float? = null,
 )
 
 /**
@@ -65,6 +67,14 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
     private var preDb = 0f
     private var scratchIn: ByteBuffer? = null
     private var firstBuffer = true
+
+    /** Tag ReplayGain del brano in arrivo (impostati dal sink a ogni cambio di formato). */
+    @Volatile
+    var replayGain: ReplayGain.Info? = null
+        set(value) {
+            field = value
+            configVersion++
+        }
 
     fun setConfig(config: EqConfig) {
         pending = config
@@ -140,13 +150,15 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
             flat[i * 5 + 3] = c.a1
             flat[i * 5 + 4] = c.a2
         }
-        val preDbEff = cfg.effectivePreampDb(fs)
+        val rgInfo = replayGain
+        val rgDb = ReplayGain.gainDb(rgInfo, cfg.replayGain)
+        val preDbEff = cfg.effectivePreampDb(fs) + rgDb
         val preGain = 10.0.pow(preDbEff / 20.0)
         stageCount = list.size
         dsp.setFilters(flat, list.size, preGain)
         dsp.setStereo(cfg.balanceFactor(), cfg.widthFactor())
 
-        val active = cfg.dspActive()
+        val active = cfg.dspActive() || kotlin.math.abs(rgDb) > 0.01
         bypass = !active
         limiterOn = cfg.limiterOn && active
         dsp.setLimiter(limiterOn, cfg.limiterThresholdDb, cfg.limiterReleaseMs, LIMITER_LOOKAHEAD_MS)
@@ -159,6 +171,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
             latencyMs = if (limiterOn) dsp.latencyFrames() * 1000f / sampleRate else 0f,
             stages = if (active) list.count { it !== EqMath.IDENTITY } else 0,
             preampDb = preDb,
+            replayGainDb = if (cfg.replayGain != ReplayGain.OFF && rgInfo != null) rgDb.toFloat() else null,
         )
         AppLog.d(
             "Audio",

@@ -78,6 +78,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.marco.mleq.audio.EqConfig
+import com.marco.mleq.audio.ReplayGain
 import com.marco.mleq.audio.EqMath
 import com.marco.mleq.audio.EqPresets
 import java.util.Locale
@@ -739,6 +740,24 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
                 checked = eq.faithful,
                 onCheckedChange = { on -> env.feedback.tapScreen(); settings.updateEq { it.copy(faithful = on) } }
             )
+        }
+        Column {
+            Text("ReplayGain", color = Color.White, fontSize = 14.sp)
+            val rg = env.engine.eqProcessor.info.replayGainDb
+            Text(
+                when {
+                    eq.replayGain == ReplayGain.OFF -> "Livella i brani con i tag del file"
+                    rg == null -> "Nessun tag nel brano attuale"
+                    else -> String.format(Locale.ITALY, "Brano attuale: %+.1f dB", rg)
+                },
+                color = Color(0xFF7C828C), fontSize = 11.sp
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip("Spento", eq.replayGain == ReplayGain.OFF) { env.feedback.tapScreen(); settings.updateEq { it.copy(replayGain = ReplayGain.OFF) } }
+                Chip("Brano", eq.replayGain == ReplayGain.TRACK) { env.feedback.tapScreen(); settings.updateEq { it.copy(replayGain = ReplayGain.TRACK) } }
+                Chip("Album", eq.replayGain == ReplayGain.ALBUM) { env.feedback.tapScreen(); settings.updateEq { it.copy(replayGain = ReplayGain.ALBUM) } }
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Preamp", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))

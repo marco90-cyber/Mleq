@@ -44,6 +44,7 @@ class ProcessingAudioSink(
             processor.targetRate = if (plan != null && plan.rate != inputFormat.sampleRate) plan.rate else 0
             processor.outputBits = plan?.bits ?: 32
             monitor.lastPlan = plan?.let { it.describe(inputFormat.sampleRate) } ?: "Standard (uscita non adattata)"
+            processor.replayGain = ReplayGain.parse(inputFormat.metadata)
             try {
                 val out = processor.configure(AudioProcessor.AudioFormat(inputFormat))
                 if (processor.isActive) {
