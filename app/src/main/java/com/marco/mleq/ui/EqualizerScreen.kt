@@ -621,16 +621,14 @@ private fun TonePanel(env: AppEnv, eq: EqConfig, onFreq: (FreqTarget) -> Unit) {
             )
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Headroom", color = Color.White, fontSize = 14.sp)
-                val peak = eq.tonePeakDb()
-                Text(
-                    if (!eq.toneHeadroom) "Il rinforzo può finire nel limiter"
-                    else if (peak < 0.05) "Abbassa il livello quando rinforzi"
-                    else String.format(Locale.ITALY, "Livello abbassato di %.1f dB", peak),
-                    color = Color(0xFF7C828C), fontSize = 11.sp
-                )
-            }
+            val peak = eq.tonePeakDb()
+            Text("Headroom", color = Color.White, fontSize = 14.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (!eq.toneHeadroom) "spento" else if (peak < 0.05) "automatico"
+                else String.format(Locale.ITALY, "-%.1f dB", peak),
+                color = Color(0xFF7C828C), fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f)
+            )
             NeonSwitch(
                 checked = eq.toneHeadroom,
                 onCheckedChange = { on -> env.feedback.tapScreen(); settings.updateEq { it.copy(toneHeadroom = on) } }
@@ -697,7 +695,7 @@ private fun StereoKnob(
         Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text(valueText, color = Color(0xFF9AA0AA), fontSize = 13.sp)
         Spacer(Modifier.height(4.dp))
-        Knob(value = knob, color = color, size = 76.dp, onTick = onTick, onDetent = onDetent, zero = 50, stepSize = 5, onChange = onChange)
+        Knob(value = knob, color = color, size = 68.dp, onTick = onTick, onDetent = onDetent, zero = 50, stepSize = 5, onChange = onChange)
         Spacer(Modifier.height(4.dp))
         Box(
             Modifier
@@ -909,22 +907,22 @@ private fun ToneKnob(
     onFreqClick: () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text(
             "$percent%  (+" + String.format(Locale.ITALY, "%.1f", EqMath.toneDb(percent)) + " dB)",
-            color = Color(0xFF9AA0AA), fontSize = 14.sp
+            color = Color(0xFF9AA0AA), fontSize = 12.sp
         )
-        Spacer(Modifier.height(6.dp))
-        Knob(value = percent, color = color, size = 84.dp, onTick = onTick, onDetent = onDetent, zero = 0, stepSize = 10, onChange = onChange)
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
+        Knob(value = percent, color = color, size = 70.dp, onTick = onTick, onDetent = onDetent, zero = 0, stepSize = 10, onChange = onChange)
+        Spacer(Modifier.height(4.dp))
         Box(
             Modifier
                 .clip(RoundedCornerShape(50))
                 .background(ChipColor)
                 .clickable(onClick = onFreqClick)
-                .padding(horizontal = 14.dp, vertical = 6.dp)
+                .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
-            Text("Freq ${fmtFreqLong(freq)}", color = Color.White, fontSize = 13.sp)
+            Text("Freq ${fmtFreqLong(freq)}", color = Color.White, fontSize = 13.sp, maxLines = 1)
         }
     }
 }
