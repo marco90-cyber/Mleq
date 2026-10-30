@@ -748,8 +748,10 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
             Text(
                 when {
                     eq.replayGain == ReplayGain.OFF -> "Livella i brani con i tag del file"
-                    rg == null -> "Nessun tag nel brano attuale"
-                    else -> String.format(Locale.ITALY, "Brano attuale: %+.1f dB", rg)
+                    rg == null && env.engine.scanningCurrent -> "Nessun tag: sto misurando il brano…"
+                    rg == null -> "Nessun tag e misura non riuscita"
+                    else -> String.format(Locale.ITALY, "Brano attuale: %+.1f dB", rg) +
+                        if (env.engine.eqProcessor.info.replayGainSource == "analisi") " (misurato dall'app)" else " (dai tag)"
                 },
                 color = Color(0xFF7C828C), fontSize = 11.sp
             )

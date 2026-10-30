@@ -59,6 +59,9 @@ class Settings(context: Context) {
     private val sp: SharedPreferences =
         context.applicationContext.getSharedPreferences("mleq_settings", Context.MODE_PRIVATE)
 
+    /** Loudness misurata dei brani senza tag ReplayGain. */
+    val loudnessCache = com.marco.mleq.audio.LoudnessCache(sp)
+
     // Suoni e tatto
     var hapticScreen by BoolPref(sp, "haptic_screen", true)
     var soundScreen by BoolPref(sp, "sound_screen", false)

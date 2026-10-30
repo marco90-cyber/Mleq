@@ -2,6 +2,7 @@
 #include <jni.h>
 
 #include "mleq_dsp.h"
+#include "mleq_loudness.h"
 
 using mleq::Engine;
 
@@ -92,6 +93,29 @@ JNIEXPORT jint JNICALL Java_com_marco_mleq_audio_NativeDsp_nFlush(JNIEnv* env, j
     auto* out = static_cast<uint8_t*>(env->GetDirectBufferAddress(outBuf));
     if (!out) return 0;
     return reinterpret_cast<Engine*>(h)->flush(out, outEnc, maxFrames);
+}
+
+JNIEXPORT jlong JNICALL Java_com_marco_mleq_audio_NativeLoudness_nCreate(JNIEnv*, jobject, jint sr, jint ch) {
+    return reinterpret_cast<jlong>(new mleq::LoudnessMeter(sr, ch));
+}
+
+JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeLoudness_nFeed(JNIEnv* env, jobject, jlong h, jobject buf,
+                                                                      jint frames) {
+    auto* p = static_cast<float*>(env->GetDirectBufferAddress(buf));
+    if (p && frames > 0) reinterpret_cast<mleq::LoudnessMeter*>(h)->feed(p, frames);
+}
+
+// out[0] = LUFS integrati (-1000 = non misurabile), out[1] = picco dei campioni (lineare)
+JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeLoudness_nResult(JNIEnv* env, jobject, jlong h,
+                                                                        jdoubleArray out) {
+    if (env->GetArrayLength(out) < 2) return;
+    auto* m = reinterpret_cast<mleq::LoudnessMeter*>(h);
+    jdouble v[2] = {m->integrated(), m->samplePeak()};
+    env->SetDoubleArrayRegion(out, 0, 2, v);
+}
+
+JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeLoudness_nDestroy(JNIEnv*, jobject, jlong h) {
+    delete reinterpret_cast<mleq::LoudnessMeter*>(h);
 }
 
 }  // extern "C"

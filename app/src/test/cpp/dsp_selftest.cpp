@@ -5,6 +5,7 @@
 #include <random>
 
 #include "../../main/cpp/mleq_dsp.h"
+#include "../../main/cpp/mleq_loudness.h"
 
 using namespace mleq;
 
@@ -444,6 +445,48 @@ static void testCompressor() {
     }
 }
 
+static double measureLufs(int sr, int ch, double f, double peakDb, double seconds, double ampSecondHalf = 1.0) {
+    mleq::LoudnessMeter m(sr, ch);
+    const int N = static_cast<int>(sr * seconds);
+    std::vector<float> x(static_cast<size_t>(N) * ch);
+    for (int i = 0; i < N; i++) {
+        const double a = std::pow(10.0, peakDb / 20.0) * (i < N / 2 ? 1.0 : ampSecondHalf);
+        const float v = static_cast<float>(a * std::sin(2 * kPi * f * i / sr));
+        for (int c = 0; c < ch; c++) x[static_cast<size_t>(i) * ch + c] = v;
+    }
+    // a blocchi irregolari: il risultato non deve dipendere da come arrivano i dati
+    int pos = 0, step = 997;
+    while (pos < N) { const int n = std::min(step, N - pos); m.feed(&x[static_cast<size_t>(pos) * ch], n); pos += n; step = step % 4001 + 311; }
+    return m.integrated();
+}
+
+static void testLoudness() {
+    char msg[200];
+    // EBU Tech 3341, prova 1: seno stereo a 1 kHz a -23 dBFS di picco = -23,0 LUFS
+    for (int sr : {44100, 48000, 96000}) {
+        const double l = measureLufs(sr, 2, 1000.0, -23.0, 10.0);
+        std::snprintf(msg, sizeof msg, "loudness: seno 1 kHz stereo -23 dBFS a %d Hz = %.3f LUFS (atteso -23,0)", sr, l);
+        CHECK(std::fabs(l + 23.0) < 0.1, msg);
+    }
+    // ponderazione K: i coefficienti a 48 kHz coincidono con la tabella della norma (verificato a parte);
+    // a 100 Hz il seno pesa circa -1,8 dB, a 8 kHz circa +3,3 dB
+    const double l100 = measureLufs(48000, 2, 100.0, -23.0, 10.0), l8k = measureLufs(48000, 2, 8000.0, -23.0, 10.0);
+    std::snprintf(msg, sizeof msg, "loudness: ponderazione K: 100 Hz %.2f, 8 kHz %.2f LUFS (attesi circa -24,9 e -19,7)", l100, l8k);
+    CHECK(l100 < -24.4 && l100 > -25.3 && l8k > -20.2 && l8k < -19.3, msg);
+    // il gate relativo ignora la parte silenziosa: meta' a -23 e meta' a -50 dBFS -> -23 LUFS
+    const double g = measureLufs(48000, 2, 1000.0, -23.0, 20.0, std::pow(10.0, -27.0 / 20.0));
+    std::snprintf(msg, sizeof msg, "loudness: gate relativo, parte forte -23 e parte debole -50 dBFS -> %.2f LUFS (atteso -23,0)", g);
+    CHECK(std::fabs(g + 23.0) < 0.15, msg);
+    // gate assoluto: un brano a -90 dBFS non e' misurabile
+    CHECK(measureLufs(48000, 2, 1000.0, -90.0, 5.0) < -900.0, "loudness: sotto -70 LUFS = non misurabile");
+    // ogni 6 dB di livello = 6 dB di loudness
+    const double a = measureLufs(44100, 2, 440.0, -30.0, 6.0), b = measureLufs(44100, 2, 440.0, -24.0, 6.0);
+    std::snprintf(msg, sizeof msg, "loudness: +6 dB di livello = +%.3f dB misurati", b - a);
+    CHECK(std::fabs((b - a) - 6.0) < 0.01, msg);
+    // brano piu' corto di 400 ms: nessun blocco
+    CHECK(measureLufs(48000, 2, 1000.0, -20.0, 0.3) < -900.0, "loudness: brano < 400 ms = non misurabile");
+}
+
 int main() {
     testResample();
     testBypassBitExact();
@@ -454,6 +497,7 @@ int main() {
     testBassHold();
     testStereo();
     testCompressor();
+    testLoudness();
     testFlushAndLongRun();
     testStability();
     testChannels();

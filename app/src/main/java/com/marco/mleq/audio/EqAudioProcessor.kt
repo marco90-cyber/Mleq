@@ -22,6 +22,8 @@ data class DspInfo(
     val preampDb: Float = 0f,
     /** Guadagno ReplayGain applicato (dB); null = tag assenti o funzione spenta. */
     val replayGainDb: Float? = null,
+    /** "tag" = letto dal file, "analisi" = misurato dall'app. */
+    val replayGainSource: String = "",
 )
 
 /**
@@ -71,6 +73,14 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
     /** Tag ReplayGain del brano in arrivo (impostati dal sink a ogni cambio di formato). */
     @Volatile
     var replayGain: ReplayGain.Info? = null
+        set(value) {
+            field = value
+            configVersion++
+        }
+
+    /** Loudness misurata dall'app per il brano attuale, usata se il file non ha tag. */
+    @Volatile
+    var scannedGain: ReplayGain.Info? = null
         set(value) {
             field = value
             configVersion++
@@ -153,7 +163,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
             flat[i * 5 + 3] = c.a1
             flat[i * 5 + 4] = c.a2
         }
-        val rgInfo = replayGain
+        val rgInfo = replayGain ?: scannedGain
         val rgDb = ReplayGain.gainDb(rgInfo, cfg.replayGain)
         val preDbEff = cfg.effectivePreampDb(fs) + rgDb
         val preGain = 10.0.pow(preDbEff / 20.0)
@@ -179,6 +189,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
             stages = if (active) list.count { it !== EqMath.IDENTITY } else 0,
             preampDb = preDb,
             replayGainDb = if (cfg.replayGain != ReplayGain.OFF && rgInfo != null) rgDb.toFloat() else null,
+            replayGainSource = if (rgInfo == null) "" else if (replayGain != null) "tag" else "analisi",
         )
         AppLog.d(
             "Audio",

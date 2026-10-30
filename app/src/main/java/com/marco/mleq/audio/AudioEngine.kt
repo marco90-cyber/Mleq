@@ -26,6 +26,8 @@ import androidx.media3.session.SessionToken
 import com.marco.mleq.data.Settings
 import com.marco.mleq.data.Track
 import com.marco.mleq.util.AppLog
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Motore audio condiviso da interfaccia e servizio in background:
@@ -58,6 +60,14 @@ class AudioEngine(
         private set
     var trackOffload by mutableStateOf(false)
         private set
+
+    /** True mentre il brano attuale, senza tag ReplayGain, viene analizzato. */
+    var scanningCurrent by mutableStateOf(false)
+        private set
+
+    private val scanExecutor = Executors.newSingleThreadExecutor { r -> Thread(r, "mleq-loudness").apply { priority = Thread.MIN_PRIORITY } }
+    private var scanCancel = AtomicBoolean(false)
+    private val scanQueued = HashSet<String>()
 
     private var queue: List<Track> = emptyList()
     private var runtimeSampleRate = 0
@@ -113,7 +123,14 @@ class AudioEngine(
         })
 
         eqProcessor.setConfig(settings.eq)
-        settings.onEqChanged = { cfg -> eqProcessor.setConfig(cfg) }
+        var lastRgMode = settings.eq.replayGain
+        settings.onEqChanged = { cfg ->
+            eqProcessor.setConfig(cfg)
+            if (cfg.replayGain != lastRgMode) {
+                lastRgMode = cfg.replayGain
+                if (cfg.replayGain != ReplayGain.OFF) planScans()
+            }
+        }
 
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
@@ -194,10 +211,46 @@ class AudioEngine(
         val base = queue.getOrNull(idx)
         queueIndex = idx
         queueSize = queue.size
+        val prev = currentTrack?.uri
         currentTrack = base?.copy(
             sampleRate = if (runtimeSampleRate > 0) runtimeSampleRate else base.sampleRate,
             bits = if (runtimePcmBits > 0) runtimePcmBits else base.bits,
         )
+        if (base?.uri != prev) {
+            eqProcessor.scannedGain = base?.let { settings.loudnessCache.get(it.uri) }
+            planScans()
+        }
+    }
+
+    /** Analizza il brano attuale e il successivo (se mancano nella cache), in background. */
+    private fun planScans() {
+        if (settings.eq.replayGain == ReplayGain.OFF) {
+            scanningCurrent = false
+            return
+        }
+        val idx = player.currentMediaItemIndex
+        scanningCurrent = false
+        for (i in listOf(idx, idx + 1)) {
+            val t = queue.getOrNull(i) ?: continue
+            if (settings.loudnessCache.get(t.uri) != null) continue
+            if (i == idx) scanningCurrent = true
+            if (!scanQueued.add(t.uri)) continue
+            val cancel = scanCancel
+            scanExecutor.execute {
+                val r = if (cancel.get()) null else LoudnessScanner.scan(app, t.uri, cancel)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    scanQueued.remove(t.uri)
+                    if (r != null) {
+                        settings.loudnessCache.put(t.uri, r)
+                        AppLog.i("Audio", "Loudness di ${t.title}: ${"%.1f".format(r.lufs)} LUFS, picco ${"%.3f".format(r.peak)}")
+                        if (currentTrack?.uri == t.uri) eqProcessor.scannedGain = LoudnessScanner.toInfo(r)
+                    } else if (!cancel.get()) {
+                        AppLog.w("Audio", "Loudness di ${t.title}: analisi non riuscita")
+                    }
+                    if (currentTrack?.uri == t.uri) scanningCurrent = false
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ comandi
@@ -217,6 +270,9 @@ class AudioEngine(
     /** Sostituisce la coda con i file scelti e avvia la riproduzione dal primo. */
     fun playUris(uris: List<Uri>, startIndex: Int = 0) {
         if (uris.isEmpty()) return
+        scanCancel.set(true)            // annulla le analisi della coda precedente
+        scanCancel = AtomicBoolean(false)
+        scanQueued.clear()
         queue = uris.map { describe(it) }
         runtimeSampleRate = 0
         runtimePcmBits = 0
