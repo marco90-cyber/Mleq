@@ -36,7 +36,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
 
-private val PanelColor = Color(0xFF17181C)
+private val PanelColor: Color get() = Ml.panel
 
 private fun fmtTime(ms: Long): String {
     val s = (ms.coerceAtLeast(0) / 1000).toInt()
@@ -72,7 +72,7 @@ fun PlayerBar(env: AppEnv) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(PanelColor)
             .padding(horizontal = 4.dp)
     ) {
@@ -87,32 +87,32 @@ fun PlayerBar(env: AppEnv) {
             ) {
                 Text(
                     track?.title ?: "Scegli un file per provare l'equalizzatore",
-                    color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    color = Ml.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
                 if (track != null) {
                     Text(
                         trackLine(track.formatLabel, track.sampleRate, track.bits, engine.queueIndex, engine.queueSize),
-                        color = Color(0xFF9AA0AA), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        color = Ml.textDim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
             }
             IconButton(onClick = { env.feedback.tapScreen(); engine.previous() }, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Filled.SkipPrevious, contentDescription = "Precedente", tint = Color.White)
+                Icon(Icons.Filled.SkipPrevious, contentDescription = "Precedente", tint = Ml.text)
             }
             IconButton(onClick = { env.feedback.tapScreen(); engine.togglePlayPause() }, modifier = Modifier.size(44.dp)) {
                 Icon(
                     if (engine.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                     contentDescription = if (engine.isPlaying) "Pausa" else "Riproduci",
-                    tint = Color.White, modifier = Modifier.size(30.dp)
+                    tint = Ml.text, modifier = Modifier.size(30.dp)
                 )
             }
             IconButton(onClick = { env.feedback.tapScreen(); engine.next() }, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Filled.SkipNext, contentDescription = "Successivo", tint = Color.White)
+                Icon(Icons.Filled.SkipNext, contentDescription = "Successivo", tint = Ml.text)
             }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(fmtTime(position), color = Color(0xFF9AA0AA), fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp))
+            Text(fmtTime(position), color = Ml.textDim, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp))
             NeonSlider(
                 value = progress, valueRange = 0f..1f,
                 onValueChange = { v ->
@@ -124,7 +124,7 @@ fun PlayerBar(env: AppEnv) {
                 },
                 modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
             )
-            Text(fmtTime(duration), color = Color(0xFF9AA0AA), fontSize = 11.sp, modifier = Modifier.padding(end = 8.dp))
+            Text(fmtTime(duration), color = Ml.textDim, fontSize = 11.sp, modifier = Modifier.padding(end = 8.dp))
         }
     }
 }

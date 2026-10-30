@@ -19,9 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,7 +32,7 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun EqApp(env: AppEnv) {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    MlTheme(dynamic = env.settings.dynamicColors, amoled = env.settings.amoled) {
         val activity = LocalContext.current as? Activity
 
         // Il tasto indietro chiude la schermata aperta; dalla home manda l'app in secondo piano
@@ -43,7 +41,7 @@ fun EqApp(env: AppEnv) {
             else activity?.moveTaskToBack(true)
         }
 
-        Box(Modifier.fillMaxSize().background(Color(0xFF0C0C0E))) {
+        Box(Modifier.fillMaxSize().background(Ml.background)) {
             EqualizerScreen(env)
 
             OverlayHost(env, env.overlay == Overlay.Analyzer) { AnalyzerOverlay(env) }
@@ -78,7 +76,7 @@ private fun AnalyzerOverlay(env: AppEnv) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color(0xFF0C0C0E))
+            .background(Ml.background)
             .safeDrawingPadding()
     ) {
         Row(
@@ -89,9 +87,9 @@ private fun AnalyzerOverlay(env: AppEnv) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { env.overlay = Overlay.None }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro", tint = Ml.text)
             }
-            Text("Analizzatore", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Analizzatore", color = Ml.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
         Box(Modifier.weight(1f)) { AnalyzerView(env) }
     }

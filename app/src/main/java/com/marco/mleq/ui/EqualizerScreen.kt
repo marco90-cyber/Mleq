@@ -87,11 +87,11 @@ import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-private val BgColor = Color(0xFF0C0C0E)
-private val PanelColor = Color(0xFF17181C)
-private val ChipColor = Color(0xFF26282E)
-private val Accent = Color(0xFF00E5FF)
-private val BassColor = Color(0xFF2979FF)
+private val BgColor: Color get() = Ml.background
+private val PanelColor: Color get() = Ml.panel
+private val ChipColor: Color get() = Ml.chip
+private val Accent: Color get() = Ml.primary
+private val BassColor: Color get() = Ml.tertiary
 
 private sealed class FreqTarget {
     data class Band(val index: Int) : FreqTarget()
@@ -178,10 +178,10 @@ fun EqualizerScreen(env: AppEnv) {
         ) {
             Spacer(Modifier.width(8.dp))
             Text(
-                "MLEqualizer", color = Color.White, fontSize = 20.sp,
+                "MLEqualizer", color = Ml.text, fontSize = 20.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
             )
-            Text(if (eq.enabled) "Attivo" else "Spento", color = Color(0xFF9AA0AA), fontSize = 13.sp)
+            Text(if (eq.enabled) "Attivo" else "Spento", color = Ml.textDim, fontSize = 13.sp)
             Spacer(Modifier.width(8.dp))
             NeonSwitch(
                 checked = eq.enabled,
@@ -202,12 +202,12 @@ fun EqualizerScreen(env: AppEnv) {
                 Modifier
                     .width(54.dp)
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(24.dp))
                     .background(PanelColor)
                     .padding(vertical = 6.dp)
             ) {
                 BandColumn(
-                    label = "Preamp", value = eq.preampDb, color = Color(0xFFB0B4BE),
+                    label = "Preamp", value = eq.preampDb, color = Ml.textDim,
                     modifier = Modifier.fillMaxSize(),
                     onChange = { v -> settings.updateEq { it.copy(preampDb = v) } },
                     onReset = { settings.updateEq { it.copy(preampDb = 0f) } },
@@ -221,7 +221,7 @@ fun EqualizerScreen(env: AppEnv) {
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(24.dp))
                     .background(PanelColor)
                     .onSizeChanged { viewW = it.width }
             ) {
@@ -258,7 +258,7 @@ fun EqualizerScreen(env: AppEnv) {
         // stato reale dell'uscita DSP
         Text(
             text = dspLine(info),
-            color = Color(0xFF8E96A8), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+            color = Ml.textDim, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center, maxLines = 1,
             modifier = Modifier.fillMaxWidth()
         )
@@ -284,11 +284,11 @@ fun EqualizerScreen(env: AppEnv) {
                             .weight(1f)
                             .height(40.dp)
                             .clip(RoundedCornerShape(50))
-                            .border(1.dp, Color(0xFF5A5E68), RoundedCornerShape(50))
+                            .border(1.dp, Ml.outline, RoundedCornerShape(50))
                             .clickable { env.feedback.tapScreen(); presetsDialog = true },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("Preimpostazioni", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Preimpostazioni", color = Ml.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.width(8.dp))
                     Box {
@@ -296,10 +296,10 @@ fun EqualizerScreen(env: AppEnv) {
                             Modifier
                                 .size(40.dp)
                                 .clip(RoundedCornerShape(50))
-                                .border(1.dp, Color(0xFF5A5E68), RoundedCornerShape(50))
+                                .border(1.dp, Ml.outline, RoundedCornerShape(50))
                                 .clickable { env.feedback.tapScreen(); moreMenu = true },
                             contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Filled.MoreVert, "Altro", tint = Color.White) }
+                        ) { Icon(Icons.Filled.MoreVert, "Altro", tint = Ml.text) }
                         DropdownMenu(
                             expanded = moreMenu, onDismissRequest = { moreMenu = false },
                             modifier = Modifier.background(PanelColor)
@@ -309,6 +309,12 @@ fun EqualizerScreen(env: AppEnv) {
                                 moreMenu = false
                             }
                             MenuRow("Salva come preimpostazione") { saveName = ""; saveDialog = true; moreMenu = false }
+                            MenuRow(if (settings.dynamicColors) "Colori dinamici: attivi" else "Colori dinamici: spenti") {
+                                settings.dynamicColors = !settings.dynamicColors; moreMenu = false
+                            }
+                            MenuRow(if (settings.amoled) "Sfondo nero (AMOLED): sì" else "Sfondo nero (AMOLED): no") {
+                                settings.amoled = !settings.amoled; moreMenu = false
+                            }
                             MenuRow("Analizzatore") { env.overlay = Overlay.Analyzer; moreMenu = false }
                             MenuRow("Uscita audio") { env.overlay = Overlay.Output; moreMenu = false }
                             MenuRow("Log di debug") { env.overlay = Overlay.Log; moreMenu = false }
@@ -338,9 +344,9 @@ fun EqualizerScreen(env: AppEnv) {
     if (presetsDialog) {
         AlertDialog(
             onDismissRequest = { presetsDialog = false },
-            containerColor = Color(0xFF1E1F24),
-            titleContentColor = Color.White,
-            textContentColor = Color.White,
+            containerColor = Ml.dialog,
+            titleContentColor = Ml.text,
+            textContentColor = Ml.text,
             title = { Text("Preimpostazioni") },
             text = {
                 Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
@@ -357,7 +363,7 @@ fun EqualizerScreen(env: AppEnv) {
                     }
                     val mine = settings.userPresets
                     if (mine.isNotEmpty()) {
-                        Text("Le mie", color = Color(0xFF9AA0AA), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                        Text("Le mie", color = Ml.textDim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                         for (up in mine) {
                             PresetRow(up.name, onDelete = { deletePreset = up.name }) {
                                 settings.eq = up.config.copy(enabled = true, bassPercent = eq.bassPercent, bassFreq = eq.bassFreq, treblePercent = eq.treblePercent, trebleFreq = eq.trebleFreq)
@@ -365,7 +371,7 @@ fun EqualizerScreen(env: AppEnv) {
                             }
                         }
                     }
-                    Text("Di fabbrica", color = Color(0xFF9AA0AA), fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                    Text("Di fabbrica", color = Ml.textDim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                     for (p in EqPresets.all) {
                         PresetRow(p.name) {
                             settings.updateEq { it.withCurve(p.points).copy(enabled = true) }
@@ -381,9 +387,9 @@ fun EqualizerScreen(env: AppEnv) {
     if (saveDialog) {
         AlertDialog(
             onDismissRequest = { saveDialog = false },
-            containerColor = Color(0xFF1E1F24),
-            titleContentColor = Color.White,
-            textContentColor = Color.White,
+            containerColor = Ml.dialog,
+            titleContentColor = Ml.text,
+            textContentColor = Ml.text,
             title = { Text("Salva preimpostazione") },
             text = {
                 OutlinedTextField(
@@ -392,9 +398,9 @@ fun EqualizerScreen(env: AppEnv) {
                     singleLine = true,
                     label = { Text("Nome") },
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                        focusedLabelColor = Accent, unfocusedLabelColor = Color(0xFF9AA0AA),
-                        focusedBorderColor = Accent, unfocusedBorderColor = Color(0xFF4A4E58),
+                        focusedTextColor = Ml.text, unfocusedTextColor = Ml.text,
+                        focusedLabelColor = Accent, unfocusedLabelColor = Ml.textDim,
+                        focusedBorderColor = Accent, unfocusedBorderColor = Ml.outlineVariant,
                         cursorColor = Accent,
                     )
                 )
@@ -412,9 +418,9 @@ fun EqualizerScreen(env: AppEnv) {
     deletePreset?.let { name ->
         AlertDialog(
             onDismissRequest = { deletePreset = null },
-            containerColor = Color(0xFF1E1F24),
-            titleContentColor = Color.White,
-            textContentColor = Color.White,
+            containerColor = Ml.dialog,
+            titleContentColor = Ml.text,
+            textContentColor = Ml.text,
             title = { Text("Elimina preimpostazione") },
             text = { Text("Vuoi eliminare \"$name\"?") },
             confirmButton = {
@@ -425,7 +431,7 @@ fun EqualizerScreen(env: AppEnv) {
     }
 }
 
-internal val NeonGreen = Color(0xFF00E676)
+internal val NeonGreen: Color get() = Ml.primary
 
 /** Interruttore nel tema dell'equalizzatore (verde neon su grafite). */
 @Composable
@@ -435,7 +441,7 @@ private fun NeonSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
             .width(48.dp)
             .height(28.dp)
             .clip(RoundedCornerShape(50))
-            .background(if (checked) NeonGreen else Color(0xFF3A3D45))
+            .background(if (checked) NeonGreen else Ml.outlineVariant)
             .clickable { onCheckedChange(!checked) }
             .padding(3.dp),
         contentAlignment = if (checked) Alignment.CenterEnd else Alignment.CenterStart
@@ -444,7 +450,7 @@ private fun NeonSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
             Modifier
                 .size(22.dp)
                 .clip(CircleShape)
-                .background(if (checked) Color(0xFF0C0C0E) else Color(0xFF9AA0AA))
+                .background(if (checked) Ml.onPrimary else Ml.textDim)
         )
     }
 }
@@ -481,12 +487,12 @@ internal fun NeonSlider(
         val cy = this.size.height / 2f
         val frac = ((value - lo) / (hi - lo)).coerceIn(0f, 1f)
         val xv = pad + frac * (this.size.width - 2 * pad)
-        drawLine(Color(0xFF3A3D45), Offset(pad, cy), Offset(this.size.width - pad, cy), 3.dp.toPx(), StrokeCap.Round)
+        drawLine(Ml.outlineVariant, Offset(pad, cy), Offset(this.size.width - pad, cy), 3.dp.toPx(), StrokeCap.Round)
         drawLine(NeonGreen.copy(alpha = 0.25f), Offset(pad, cy), Offset(xv, cy), 8.dp.toPx(), StrokeCap.Round)
         drawLine(NeonGreen, Offset(pad, cy), Offset(xv, cy), 3.dp.toPx(), StrokeCap.Round)
-        drawCircle(Color(0xFF26282E), 11.dp.toPx(), Offset(xv, cy))
-        drawCircle(Color(0xFF4A4E58), 11.dp.toPx(), Offset(xv, cy), style = Stroke(1.dp.toPx()))
-        drawCircle(Color(0xFFE8EAF0), 4.dp.toPx(), Offset(xv, cy))
+        drawCircle(Ml.chip, 11.dp.toPx(), Offset(xv, cy))
+        drawCircle(Ml.outlineVariant, 11.dp.toPx(), Offset(xv, cy), style = Stroke(1.dp.toPx()))
+        drawCircle(Ml.text, 4.dp.toPx(), Offset(xv, cy))
     }
 }
 
@@ -508,13 +514,13 @@ private fun ModeButton(text: String, selected: Boolean, modifier: Modifier, onCl
     Box(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(if (selected) NeonGreen else ChipColor)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text, color = if (selected) Color(0xFF0C0C0E) else Color.White, fontSize = 15.sp,
+            text, color = if (selected) Ml.onPrimary else Ml.text, fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold
         )
     }
@@ -522,7 +528,7 @@ private fun ModeButton(text: String, selected: Boolean, modifier: Modifier, onCl
 
 @Composable
 private fun MenuRow(text: String, onClick: () -> Unit) {
-    DropdownMenuItem(text = { Text(text, color = Color.White) }, onClick = onClick)
+    DropdownMenuItem(text = { Text(text, color = Ml.text) }, onClick = onClick)
 }
 
 @Composable
@@ -536,13 +542,13 @@ private fun PresetRow(text: String, accent: Boolean = false, onDelete: (() -> Un
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text, color = if (accent) Accent else Color.White, fontSize = 16.sp,
+            text, color = if (accent) Accent else Ml.text, fontSize = 16.sp,
             fontWeight = if (accent) FontWeight.Bold else FontWeight.Normal,
             modifier = Modifier.weight(1f)
         )
         if (onDelete != null) {
             IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Filled.Delete, "Elimina", tint = Color(0xFF9AA0AA))
+                Icon(Icons.Filled.Delete, "Elimina", tint = Ml.textDim)
             }
         }
     }
@@ -554,8 +560,8 @@ private fun BandsPanel(env: AppEnv, eq: EqConfig) {
     val settings = env.settings
     var menu by remember { mutableStateOf(false) }
     val options = (listOf(5, 10, 15, 31) + eq.bandCount).distinct().sorted()
-    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(PanelColor).padding(12.dp)) {
-        Text("Numero di bande", color = Color(0xFF9AA0AA), fontSize = 13.sp)
+    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(PanelColor).padding(12.dp)) {
+        Text("Numero di bande", color = Ml.textDim, fontSize = 13.sp)
         Spacer(Modifier.height(6.dp))
         Box {
             Row(
@@ -566,8 +572,8 @@ private fun BandsPanel(env: AppEnv, eq: EqConfig) {
                     .padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("${eq.bandCount} bande", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Icon(Icons.Filled.ArrowDropDown, null, tint = Color.White)
+                Text("${eq.bandCount} bande", color = Ml.text, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Icon(Icons.Filled.ArrowDropDown, null, tint = Ml.text)
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, modifier = Modifier.background(PanelColor)) {
                 for (n in options) {
@@ -575,7 +581,7 @@ private fun BandsPanel(env: AppEnv, eq: EqConfig) {
                         text = {
                             Text(
                                 "$n bande",
-                                color = if (n == eq.bandCount) Accent else Color.White,
+                                color = if (n == eq.bandCount) Accent else Ml.text,
                                 fontWeight = if (n == eq.bandCount) FontWeight.Bold else FontWeight.Normal
                             )
                         },
@@ -591,7 +597,7 @@ private fun BandsPanel(env: AppEnv, eq: EqConfig) {
         Spacer(Modifier.height(10.dp))
         Text(
             "Tocca la frequenza sotto uno slider per scrivere frequenza, guadagno e Q o cambiare il tipo di filtro. Doppio tocco: azzera la banda.",
-            color = Color(0xFF7C828C), fontSize = 12.sp
+            color = Ml.textFaint, fontSize = 12.sp
         )
     }
 }
@@ -600,7 +606,7 @@ private fun BandsPanel(env: AppEnv, eq: EqConfig) {
 @Composable
 private fun TonePanel(env: AppEnv, eq: EqConfig, onFreq: (FreqTarget) -> Unit) {
     val settings = env.settings
-    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(PanelColor).padding(vertical = 6.dp)) {
+    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(PanelColor).padding(vertical = 6.dp)) {
         Row(
             Modifier.fillMaxWidth().weight(1f),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -623,12 +629,12 @@ private fun TonePanel(env: AppEnv, eq: EqConfig, onFreq: (FreqTarget) -> Unit) {
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             val peak = eq.tonePeakDb()
-            Text("Headroom", color = Color.White, fontSize = 14.sp)
+            Text("Headroom", color = Ml.text, fontSize = 14.sp)
             Spacer(Modifier.width(8.dp))
             Text(
                 if (!eq.toneHeadroom) "spento" else if (peak < 0.05) "automatico"
                 else String.format(Locale.ITALY, "-%.1f dB", peak),
-                color = Color(0xFF7C828C), fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f)
+                color = Ml.textFaint, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f)
             )
             NeonSwitch(
                 checked = eq.toneHeadroom,
@@ -642,7 +648,7 @@ private fun TonePanel(env: AppEnv, eq: EqConfig, onFreq: (FreqTarget) -> Unit) {
 @Composable
 private fun StereoPanel(env: AppEnv, eq: EqConfig) {
     val settings = env.settings
-    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(PanelColor).padding(vertical = 6.dp)) {
+    Column(Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(PanelColor).padding(vertical = 6.dp)) {
         Row(
             Modifier.fillMaxWidth().weight(1f),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -694,8 +700,8 @@ private fun StereoKnob(
     onReset: () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        Text(valueText, color = Color(0xFF9AA0AA), fontSize = 13.sp)
+        Text(title, color = Ml.text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(valueText, color = Ml.textDim, fontSize = 13.sp)
         Spacer(Modifier.height(4.dp))
         Knob(value = knob, color = color, size = 68.dp, onTick = onTick, onDetent = onDetent, zero = zero, stepSize = 5, onChange = onChange)
         Spacer(Modifier.height(4.dp))
@@ -705,7 +711,7 @@ private fun StereoKnob(
                 .background(ChipColor)
                 .clickable(onClick = onReset)
                 .padding(horizontal = 12.dp, vertical = 4.dp)
-        ) { Text("Azzera", color = Color.White, fontSize = 12.sp) }
+        ) { Text("Azzera", color = Ml.text, fontSize = 12.sp) }
     }
 }
 
@@ -716,7 +722,7 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
     Column(
         Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(PanelColor)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -724,16 +730,16 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Q automatico", color = Color.White, fontSize = 14.sp)
-                Text("Larghezza delle bande dalla loro distanza", color = Color(0xFF7C828C), fontSize = 11.sp)
+                Text("Q automatico", color = Ml.text, fontSize = 14.sp)
+                Text("Larghezza delle bande dalla loro distanza", color = Ml.textFaint, fontSize = 11.sp)
             }
             Spacer(Modifier.width(8.dp))
             Chip("Applica", selected = false) { env.feedback.tapScreen(); settings.updateEq { it.withAutoQ() } }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Curva fedele", color = Color.White, fontSize = 14.sp)
-                Text("La curva passa dai valori degli slider", color = Color(0xFF7C828C), fontSize = 11.sp)
+                Text("Curva fedele", color = Ml.text, fontSize = 14.sp)
+                Text("La curva passa dai valori degli slider", color = Ml.textFaint, fontSize = 11.sp)
             }
             Spacer(Modifier.width(8.dp))
             NeonSwitch(
@@ -743,7 +749,7 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
         }
         CompressorSection(env, eq)
         Column {
-            Text("ReplayGain", color = Color.White, fontSize = 14.sp)
+            Text("ReplayGain", color = Ml.text, fontSize = 14.sp)
             val rg = env.engine.eqProcessor.info.replayGainDb
             Text(
                 when {
@@ -753,7 +759,7 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
                     else -> String.format(Locale.ITALY, "Brano attuale: %+.1f dB", rg) +
                         if (env.engine.eqProcessor.info.replayGainSource == "analisi") " (misurato dall'app)" else " (dai tag)"
                 },
-                color = Color(0xFF7C828C), fontSize = 11.sp
+                color = Ml.textFaint, fontSize = 11.sp
             )
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -763,7 +769,7 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Preamp", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text("Preamp", color = Ml.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
             NumField(
                 label = "dB", value = eq.preampDb, decimals = 1, suffix = "dB",
                 modifier = Modifier.width(120.dp)
@@ -771,7 +777,7 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
         }
         Text(
             "Valori esatti: tocca la frequenza sotto uno slider (frequenza, guadagno, Q e tipo di filtro).",
-            color = Color(0xFF7C828C), fontSize = 11.sp
+            color = Ml.textFaint, fontSize = 11.sp
         )
     }
 }
@@ -788,11 +794,11 @@ private fun CompressorSection(env: AppEnv, eq: EqConfig) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Compressore", color = Color.White, fontSize = 14.sp)
+                Text("Compressore", color = Ml.text, fontSize = 14.sp)
                 Text(
                     if (!eq.compressorOn) "Riduce la differenza tra parti forti e deboli"
                     else if (red > -0.05f) "nessuna riduzione" else String.format(Locale.ITALY, "riduzione fino a %.1f dB", -red),
-                    color = Color(0xFF7C828C), fontSize = 11.sp
+                    color = Ml.textFaint, fontSize = 11.sp
                 )
             }
             NeonSwitch(
@@ -806,7 +812,7 @@ private fun CompressorSection(env: AppEnv, eq: EqConfig) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "$label ${String.format(Locale.ITALY, if (step < 1f) "%.1f" else "%.0f", value)} $unit",
-                        color = Color(0xFFDDE1EA), fontSize = 12.sp, modifier = Modifier.width(112.dp)
+                        color = Ml.text, fontSize = 12.sp, modifier = Modifier.width(112.dp)
                     )
                     NeonSlider(
                         value = value, valueRange = range,
@@ -847,7 +853,7 @@ private fun NumField(
         onValueChange = { text = it.take(8) },
         singleLine = true,
         label = { Text(label) },
-        suffix = { Text(suffix, color = Color(0xFF9AA0AA)) },
+        suffix = { Text(suffix, color = Ml.textDim) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { commit() }),
         modifier = modifier.onFocusChanged { st ->
@@ -855,9 +861,9 @@ private fun NumField(
             focused = st.isFocused
         },
         colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-            focusedLabelColor = Accent, unfocusedLabelColor = Color(0xFF9AA0AA),
-            focusedBorderColor = Accent, unfocusedBorderColor = Color(0xFF4A4E58),
+            focusedTextColor = Ml.text, unfocusedTextColor = Ml.text,
+            focusedLabelColor = Accent, unfocusedLabelColor = Ml.textDim,
+            focusedBorderColor = Accent, unfocusedBorderColor = Ml.outlineVariant,
             cursorColor = Accent,
         )
     )
@@ -876,16 +882,16 @@ private fun LimiterPanel(env: AppEnv, eq: EqConfig) {
     Column(
         Modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(24.dp))
             .background(PanelColor)
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Limiter", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text("Limiter", color = Ml.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
             Text(
                 if (!eq.limiterOn) "spento" else if (red > -0.05f) "nessuna riduzione" else String.format(Locale.ITALY, "%.1f dB", red),
-                color = Color(0xFF9AA0AA), fontSize = 12.sp
+                color = Ml.textDim, fontSize = 12.sp
             )
             Spacer(Modifier.width(8.dp))
             NeonSwitch(
@@ -894,7 +900,7 @@ private fun LimiterPanel(env: AppEnv, eq: EqConfig) {
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Soglia ${String.format(Locale.ITALY, "%.1f", eq.limiterThresholdDb)} dB", color = Color(0xFFDDE1EA), fontSize = 12.sp, modifier = Modifier.width(96.dp))
+            Text("Soglia ${String.format(Locale.ITALY, "%.1f", eq.limiterThresholdDb)} dB", color = Ml.text, fontSize = 12.sp, modifier = Modifier.width(96.dp))
             NeonSlider(
                 value = eq.limiterThresholdDb, valueRange = -12f..0f,
                 onValueChange = { v -> settings.updateEq { it.copy(limiterThresholdDb = (v * 2).roundToInt() / 2f) } },
@@ -902,7 +908,7 @@ private fun LimiterPanel(env: AppEnv, eq: EqConfig) {
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Rilascio ${eq.limiterReleaseMs.roundToInt()} ms", color = Color(0xFFDDE1EA), fontSize = 12.sp, modifier = Modifier.width(96.dp))
+            Text("Rilascio ${eq.limiterReleaseMs.roundToInt()} ms", color = Ml.text, fontSize = 12.sp, modifier = Modifier.width(96.dp))
             NeonSlider(
                 value = eq.limiterReleaseMs, valueRange = 20f..500f,
                 onValueChange = { v -> settings.updateEq { it.copy(limiterReleaseMs = (v / 10f).roundToInt() * 10f) } },
@@ -910,7 +916,7 @@ private fun LimiterPanel(env: AppEnv, eq: EqConfig) {
             )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Auto-headroom", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text("Auto-headroom", color = Ml.text, fontSize = 14.sp, modifier = Modifier.weight(1f))
             NeonSwitch(
                 checked = eq.autoHeadroom,
                 onCheckedChange = { on -> env.feedback.tapScreen(); settings.updateEq { it.copy(autoHeadroom = on) } }
@@ -932,7 +938,7 @@ private fun Chip(
     Box(
         Modifier
             .clip(RoundedCornerShape(50))
-            .background(if (selected) Accent else if (accent) Color(0xFF1B3A40) else ChipColor)
+            .background(if (selected) Accent else if (accent) Ml.primaryContainer else ChipColor)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { click.value() },
@@ -943,7 +949,7 @@ private fun Chip(
         contentAlignment = Alignment.Center
     ) {
         Text(
-            text, color = if (selected) Color.Black else Color.White, fontSize = 14.sp,
+            text, color = if (selected) Ml.onPrimary else Ml.text, fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold
         )
     }
@@ -961,10 +967,10 @@ private fun ToneKnob(
     onFreqClick: () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = Ml.text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         Text(
             "$percent%  (+" + String.format(Locale.ITALY, "%.1f", EqMath.toneDb(percent)) + " dB)",
-            color = Color(0xFF9AA0AA), fontSize = 12.sp
+            color = Ml.textDim, fontSize = 12.sp
         )
         Spacer(Modifier.height(4.dp))
         Knob(value = percent, color = color, size = 70.dp, onTick = onTick, onDetent = onDetent, zero = 0, stepSize = 10, onChange = onChange)
@@ -976,7 +982,7 @@ private fun ToneKnob(
                 .clickable(onClick = onFreqClick)
                 .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
-            Text("Freq ${fmtFreqLong(freq)}", color = Color.White, fontSize = 13.sp, maxLines = 1)
+            Text("Freq ${fmtFreqLong(freq)}", color = Ml.text, fontSize = 13.sp, maxLines = 1)
         }
     }
 }
@@ -1003,11 +1009,11 @@ private fun BandColumn(
             Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onLabelClick).padding(horizontal = 3.dp, vertical = 3.dp)
         } else Modifier.padding(horizontal = 3.dp, vertical = 3.dp)
         Text(
-            label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+            label, color = Ml.text, fontSize = 11.sp, fontWeight = FontWeight.Bold,
             maxLines = 1, textAlign = TextAlign.Center, modifier = labelMod
         )
         Text(
-            String.format(Locale.ITALY, "%.1f", value), color = Color(0xFF9AA0AA), fontSize = 10.sp,
+            String.format(Locale.ITALY, "%.1f", value), color = Ml.textDim, fontSize = 10.sp,
             maxLines = 1, textAlign = TextAlign.Center
         )
     }
@@ -1074,14 +1080,14 @@ private fun VerticalGainSlider(
 
         // guida
         drawLine(
-            Color(0xFF3A3D45), Offset(cx, pad), Offset(cx, this.size.height - pad),
+            Ml.outlineVariant, Offset(cx, pad), Offset(cx, this.size.height - pad),
             strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round
         )
         // tacche +12 / 0 / -12
         for (v in listOf(range, 0f, -range)) {
             val y = yOf(v)
-            drawLine(Color(0xFF5A5E68), Offset(cx - 7.dp.toPx(), y), Offset(cx - 3.dp.toPx(), y), 1.dp.toPx())
-            drawLine(Color(0xFF5A5E68), Offset(cx + 3.dp.toPx(), y), Offset(cx + 7.dp.toPx(), y), 1.dp.toPx())
+            drawLine(Ml.outline, Offset(cx - 7.dp.toPx(), y), Offset(cx - 3.dp.toPx(), y), 1.dp.toPx())
+            drawLine(Ml.outline, Offset(cx + 3.dp.toPx(), y), Offset(cx + 7.dp.toPx(), y), 1.dp.toPx())
         }
         // linea neon
         val y0 = yOf(0f)
@@ -1094,15 +1100,15 @@ private fun VerticalGainSlider(
         val tw = minOf(this.size.width - 4.dp.toPx(), 30.dp.toPx())
         val th = 38.dp.toPx()
         drawRoundRect(
-            Color(0xFF26282E), Offset(cx - tw / 2f, yv - th / 2f), Size(tw, th),
+            Ml.chip, Offset(cx - tw / 2f, yv - th / 2f), Size(tw, th),
             CornerRadius(10.dp.toPx())
         )
         drawRoundRect(
-            Color(0xFF4A4E58), Offset(cx - tw / 2f, yv - th / 2f), Size(tw, th),
+            Ml.outlineVariant, Offset(cx - tw / 2f, yv - th / 2f), Size(tw, th),
             CornerRadius(10.dp.toPx()), style = Stroke(1.dp.toPx())
         )
         drawLine(
-            Color(0xFFE8EAF0), Offset(cx - tw * 0.28f, yv), Offset(cx + tw * 0.28f, yv),
+            Ml.text, Offset(cx - tw * 0.28f, yv), Offset(cx + tw * 0.28f, yv),
             3.dp.toPx(), StrokeCap.Round
         )
     }
@@ -1151,7 +1157,7 @@ private fun ResponseGraph(eq: EqConfig, scroll: ScrollState, viewW: Int, modifie
     Canvas(
         modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF17181C))
+            .background(Ml.panel)
             .pointerInput(eq.freqs, viewW, scroll.maxValue) {
                 detectTapGestures(onTap = { o -> scrollToX(o.x, this.size.width.toFloat()) })
             }
@@ -1172,11 +1178,11 @@ private fun ResponseGraph(eq: EqConfig, scroll: ScrollState, viewW: Int, modifie
             val xa = freqPos(freqAtIndex(f0)) * w
             val xb = freqPos(freqAtIndex(f1)) * w
             drawRoundRect(
-                Color(0x33FFFFFF), Offset(xa, 0f), Size((xb - xa).coerceAtLeast(6.dp.toPx()), h),
+                Ml.text.copy(alpha = 0.2f), Offset(xa, 0f), Size((xb - xa).coerceAtLeast(6.dp.toPx()), h),
                 CornerRadius(8.dp.toPx())
             )
         }
-        drawLine(Color(0xFF4A4E58), Offset(0f, yOf(0f)), Offset(w, yOf(0f)), 1.dp.toPx())
+        drawLine(Ml.outlineVariant, Offset(0f, yOf(0f)), Offset(w, yOf(0f)), 1.dp.toPx())
 
         val points = 160
         val path = Path()
@@ -1202,8 +1208,8 @@ private fun ResponseGraph(eq: EqConfig, scroll: ScrollState, viewW: Int, modifie
                 if (i == 0) line.moveTo(x, y) else line.lineTo(x, y)
             }
             tp.lineTo(w, y0); tp.close()
-            drawPath(tp, Color(0x55E8EAF0))
-            drawPath(line, Color(0xFFE8EAF0), style = Stroke(1.5.dp.toPx(), cap = StrokeCap.Round))
+            drawPath(tp, Ml.text.copy(alpha = 0.33f))
+            drawPath(line, Ml.text, style = Stroke(1.5.dp.toPx(), cap = StrokeCap.Round))
         }
         drawPath(path, NeonGreen, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
     }
@@ -1245,9 +1251,9 @@ private fun FreqDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Ok") } },
-        containerColor = Color(0xFF1E1F24),
-        titleContentColor = Color.White,
-        textContentColor = Color.White,
+        containerColor = Ml.dialog,
+        titleContentColor = Ml.text,
+        textContentColor = Ml.text,
         title = { Text(title) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -1288,8 +1294,8 @@ private fun FreqDialog(
                     },
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(fmtFreqLong(min), fontSize = 12.sp, color = Color(0xFF9AA0AA))
-                    Text(fmtFreqLong(max), fontSize = 12.sp, color = Color(0xFF9AA0AA))
+                    Text(fmtFreqLong(min), fontSize = 12.sp, color = Ml.textDim)
+                    Text(fmtFreqLong(max), fontSize = 12.sp, color = Ml.textDim)
                 }
                 if (target is FreqTarget.Band) {
                     val idx = target.index
@@ -1328,8 +1334,8 @@ private fun FreqDialog(
                         },
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("largo", fontSize = 12.sp, color = Color(0xFF9AA0AA))
-                        Text("stretto", fontSize = 12.sp, color = Color(0xFF9AA0AA))
+                        Text("largo", fontSize = 12.sp, color = Ml.textDim)
+                        Text("stretto", fontSize = 12.sp, color = Ml.textDim)
                     }
                 }
             }

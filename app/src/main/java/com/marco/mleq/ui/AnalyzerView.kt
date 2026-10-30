@@ -59,10 +59,10 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-private val AnBg = Color(0xFF0C0C0E)
-private val AnPanel = Color(0xFF17181C)
-private val AnText = Color(0xFFB8BCC6)
-private val AnCyan = Color(0xFF00E5FF)
+private val AnBg: Color get() = Ml.background
+private val AnPanel: Color get() = Ml.panel
+private val AnText: Color get() = Ml.textDim
+private val AnCyan: Color get() = Ml.primary
 private val AnGreen = Color(0xFF00C853)
 private val AnYellow = Color(0xFFFFEB3B)
 private val AnRed = Color(0xFFFF1744)

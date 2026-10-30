@@ -62,6 +62,12 @@ class Settings(context: Context) {
     /** Loudness misurata dei brani senza tag ReplayGain. */
     val loudnessCache = com.marco.mleq.audio.LoudnessCache(sp)
 
+    /** Colori dinamici Material You (Android 12+). */
+    var dynamicColors by BoolPref(sp, "dynamic_colors", true)
+
+    /** Sfondo nero per schermi OLED. */
+    var amoled by BoolPref(sp, "amoled", false)
+
     // Suoni e tatto
     var hapticScreen by BoolPref(sp, "haptic_screen", true)
     var soundScreen by BoolPref(sp, "sound_screen", false)

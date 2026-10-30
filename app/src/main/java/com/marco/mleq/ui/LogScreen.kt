@@ -43,7 +43,7 @@ fun LogScreen(env: AppEnv) {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Color(0xFF0C0C0E))
+            .background(Ml.background)
             .safeDrawingPadding()
     ) {
         Row(
@@ -54,17 +54,17 @@ fun LogScreen(env: AppEnv) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { env.overlay = Overlay.None }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro", tint = Ml.text)
             }
             Text(
-                "Log (${lines.size})", color = Color.White, fontSize = 18.sp,
+                "Log (${lines.size})", color = Ml.text, fontSize = 18.sp,
                 fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
             )
             IconButton(onClick = { env.actions?.shareLog() }) {
-                Icon(Icons.Filled.Share, contentDescription = "Condividi", tint = Color.White)
+                Icon(Icons.Filled.Share, contentDescription = "Condividi", tint = Ml.text)
             }
             IconButton(onClick = { AppLog.clear() }) {
-                Icon(Icons.Filled.DeleteSweep, contentDescription = "Cancella", tint = Color.White)
+                Icon(Icons.Filled.DeleteSweep, contentDescription = "Cancella", tint = Ml.text)
             }
         }
         LazyColumn(
@@ -78,7 +78,7 @@ fun LogScreen(env: AppEnv) {
                 val color = when {
                     line.contains(" E/") -> Color(0xFFFF6B6B)
                     line.contains(" W/") -> Color(0xFFFFC857)
-                    line.contains(" D/") -> Color(0xFF8E96A8)
+                    line.contains(" D/") -> Ml.textDim
                     else -> Color(0xFFDCE1EC)
                 }
                 Text(line, color = color, fontSize = 11.sp, fontFamily = FontFamily.Monospace)

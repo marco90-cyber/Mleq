@@ -36,9 +36,9 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
 
-private val Bg = Color(0xFF0C0C0E)
-private val Panel = Color(0xFF17181C)
-private val Dim = Color(0xFF9AA0AA)
+private val Bg: Color get() = Ml.background
+private val Panel: Color get() = Ml.panel
+private val Dim: Color get() = Ml.textDim
 
 private data class OutDevice(val title: String, val details: List<String>)
 
@@ -116,9 +116,9 @@ fun OutputScreen(env: AppEnv) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { env.overlay = Overlay.None }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro", tint = Ml.text)
             }
-            Text("Uscita audio", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Uscita audio", color = Ml.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
         Column(
             Modifier
@@ -184,7 +184,7 @@ fun OutputScreen(env: AppEnv) {
             Section("Uscite audio presenti (dichiarate da Android)") {
                 if (devices.isEmpty()) Line("Nessuna uscita rilevata")
                 for (d in devices) {
-                    Text(d.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(d.title, color = Ml.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     for (x in d.details) Text(x, color = Dim, fontSize = 12.sp)
                     Spacer(Modifier.height(4.dp))
                 }
@@ -219,7 +219,7 @@ private fun Section(title: String, content: @Composable () -> Unit) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
-        Text(title, color = Color(0xFF00E5FF), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(title, color = Ml.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         content()
     }
 }
@@ -228,11 +228,11 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 private fun KV(label: String, value: String) {
     Column {
         Text(label, color = Dim, fontSize = 11.sp)
-        Text(value, color = Color.White, fontSize = 14.sp)
+        Text(value, color = Ml.text, fontSize = 14.sp)
     }
 }
 
 @Composable
 private fun Line(text: String) {
-    Text(text, color = Color(0xFFDDE1EA), fontSize = 13.sp)
+    Text(text, color = Ml.text, fontSize = 13.sp)
 }

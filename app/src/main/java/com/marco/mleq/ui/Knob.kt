@@ -80,7 +80,7 @@ fun Knob(
 
         // traccia
         drawArc(
-            color = Color(0xFF2B2D33), startAngle = START, sweepAngle = SWEEP, useCenter = false,
+            color = Ml.chip, startAngle = START, sweepAngle = SWEEP, useCenter = false,
             topLeft = topLeft, size = arcSize, style = Stroke(stroke, cap = StrokeCap.Round)
         )
         // valore
@@ -99,7 +99,7 @@ fun Knob(
         // corpo
         val bodyR = w / 2f - stroke * 1.9f
         drawCircle(
-            brush = Brush.verticalGradient(listOf(Color(0xFF34363D), Color(0xFF1B1C20))),
+            brush = Brush.verticalGradient(listOf(Ml.outlineVariant, Ml.panel)),
             radius = bodyR, center = center
         )
         // indicatore
@@ -107,7 +107,7 @@ fun Knob(
         val r1 = bodyR * 0.45f
         val r2 = bodyR * 0.82f
         drawLine(
-            color = Color(0xFFE8EAF0),
+            color = Ml.text,
             start = Offset(center.x + (cos(ang) * r1).toFloat(), center.y + (sin(ang) * r1).toFloat()),
             end = Offset(center.x + (cos(ang) * r2).toFloat(), center.y + (sin(ang) * r2).toFloat()),
             strokeWidth = 5.dp.toPx(), cap = StrokeCap.Round
