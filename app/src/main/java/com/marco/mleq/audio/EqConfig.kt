@@ -55,6 +55,14 @@ data class EqConfig(
     val stereoExpand: Int = 0,
     /** Uscita mono (somma dei canali). */
     val mono: Boolean = false,
+    /** Compressore (dopo l'equalizzatore, prima del limiter). */
+    val compressorOn: Boolean = false,
+    val compThresholdDb: Float = -18f,
+    val compRatio: Float = 3f,
+    val compAttackMs: Float = 10f,
+    val compReleaseMs: Float = 150f,
+    val compKneeDb: Float = 6f,
+    val compMakeupDb: Float = 0f,
     /** ReplayGain: 0 = spento, 1 = brano, 2 = album (vedi [ReplayGain]). */
     val replayGain: Int = ReplayGain.OFF,
     /** Soglia del limiter in dBFS (-12..0). */
@@ -172,7 +180,7 @@ data class EqConfig(
 
     /** True se serve elaborare l'audio (altrimenti bypass reale). */
     fun dspActive(): Boolean =
-        enabled || bassPercent != 0 || treblePercent != 0 || stereoActive()
+        enabled || bassPercent != 0 || treblePercent != 0 || stereoActive() || compressorOn
 
     /** True se l'immagine stereo è diversa da quella originale. */
     fun stereoActive(): Boolean = mono || balance != 0 || stereoExpand != 0
@@ -231,6 +239,13 @@ data class EqConfig(
         o.put("expand", stereoExpand)
         o.put("mono", mono)
         o.put("replayGain", replayGain)
+        o.put("comp", compressorOn)
+        o.put("compThr", compThresholdDb.toDouble())
+        o.put("compRatio", compRatio.toDouble())
+        o.put("compAtk", compAttackMs.toDouble())
+        o.put("compRel", compReleaseMs.toDouble())
+        o.put("compKnee", compKneeDb.toDouble())
+        o.put("compMakeup", compMakeupDb.toDouble())
         o.put("limThr", limiterThresholdDb.toDouble())
         o.put("limRel", limiterReleaseMs.toDouble())
         o.put("preamp", preampDb.toDouble())
@@ -358,6 +373,13 @@ data class EqConfig(
                     stereoExpand = if (o.has("expand")) o.optInt("expand", 0).coerceIn(0, 100)
                     else (o.optInt("width", 100) - 100).coerceIn(0, 100),
                     mono = o.optBoolean("mono", false),
+                    compressorOn = o.optBoolean("comp", false),
+                    compThresholdDb = o.optDouble("compThr", -18.0).toFloat().coerceIn(-60f, 0f),
+                    compRatio = o.optDouble("compRatio", 3.0).toFloat().coerceIn(1f, 20f),
+                    compAttackMs = o.optDouble("compAtk", 10.0).toFloat().coerceIn(1f, 100f),
+                    compReleaseMs = o.optDouble("compRel", 150.0).toFloat().coerceIn(20f, 1000f),
+                    compKneeDb = o.optDouble("compKnee", 6.0).toFloat().coerceIn(0f, 24f),
+                    compMakeupDb = o.optDouble("compMakeup", 0.0).toFloat().coerceIn(0f, 24f),
                     replayGain = o.optInt("replayGain", ReplayGain.OFF).coerceIn(0, 2),
                     limiterThresholdDb = o.optDouble("limThr", -0.5).toFloat().coerceIn(-12f, 0f),
                     limiterReleaseMs = o.optDouble("limRel", 80.0).toFloat().coerceIn(20f, 500f),

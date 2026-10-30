@@ -370,6 +370,80 @@ static void testStereo() {
     }
 }
 
+// Misura il guadagno a regime del compressore su un tono di prova.
+static double compGain(double f, double levelDb, float thr, float ratio, float knee, float makeup, double* thd = nullptr) {
+    Engine e; e.configure(44100, 2); e.setCompressor(true, thr, ratio, 10.0f, 150.0f, knee, makeup);
+    const int N = 44100 * 3;
+    const double amp = std::pow(10.0, levelDb / 20.0);
+    std::vector<float> in(static_cast<size_t>(N) * 2), out;
+    for (int i = 0; i < N; i++) { const float v = static_cast<float>(amp * std::sin(2 * kPi * f * i / 44100.0)); in[2 * i] = v; in[2 * i + 1] = v; }
+    runFloat(e, in, out, N);
+    double sc = 0, cc = 0; const int a = 44100 * 2;
+    for (int i = a; i < N; i++) { const double t = 2 * kPi * f * i / 44100.0; sc += out[2 * i] * std::sin(t); cc += out[2 * i] * std::cos(t); }
+    sc *= 2.0 / (N - a); cc *= 2.0 / (N - a);
+    if (thd) {
+        double res = 0, sig = 0;
+        for (int i = a; i < N; i++) { const double t = 2 * kPi * f * i / 44100.0; const double fit = sc * std::sin(t) + cc * std::cos(t); res += (out[2 * i] - fit) * (out[2 * i] - fit); sig += fit * fit; }
+        *thd = 100 * std::sqrt(res / sig);
+    }
+    return 20 * std::log10(std::sqrt(sc * sc + cc * cc) / amp);
+}
+
+static void testCompressor() {
+    char msg[200];
+    // sopra soglia: -6 dBFS con soglia -18 e rapporto 4:1 -> uscita -18 + 12/4 = -15 -> riduzione 9 dB
+    double g = compGain(1000, -6, -18.0f, 4.0f, 0.0f, 0.0f);
+    std::snprintf(msg, sizeof msg, "compressore: -6 dB, soglia -18, 4:1 -> riduzione %.2f dB (attesa 9,00)", -g);
+    CHECK(std::fabs(g + 9.0) < 0.15, msg);
+    // sotto soglia: nessuna modifica
+    g = compGain(1000, -30, -18.0f, 4.0f, 0.0f, 0.0f);
+    std::snprintf(msg, sizeof msg, "compressore: sotto soglia -> %.3f dB (attesi 0)", g);
+    CHECK(std::fabs(g) < 0.05, msg);
+    // rapporto 1:1 trasparente anche sopra soglia
+    g = compGain(1000, -6, -18.0f, 1.0f, 6.0f, 0.0f);
+    std::snprintf(msg, sizeof msg, "compressore: rapporto 1:1 -> %.3f dB (attesi 0)", g);
+    CHECK(std::fabs(g) < 0.05, msg);
+    // ginocchio morbido: alla soglia la riduzione e' circa la meta' del tratto a ginocchio
+    g = compGain(1000, -18, -18.0f, 4.0f, 12.0f, 0.0f);
+    const double expKnee = (1.0 / 4.0 - 1.0) * 36.0 / 24.0;  // (1/R-1)(W/2)^2/(2W) con over=0, W=12
+    std::snprintf(msg, sizeof msg, "compressore: ginocchio morbido a soglia -> %.2f dB (atteso %.2f)", g, expKnee);
+    CHECK(std::fabs(g - expKnee) < 0.2, msg);
+    // guadagno di recupero
+    g = compGain(1000, -30, -18.0f, 4.0f, 0.0f, 6.0f);
+    CHECK(std::fabs(g - 6.0) < 0.05, "compressore: recupero +6 dB");
+    // distorsione sui bassi: tono di 60 Hz molto compresso
+    double thd = 0;
+    compGain(60, -6, -18.0f, 4.0f, 6.0f, 0.0f, &thd);
+    std::snprintf(msg, sizeof msg, "compressore: 60 Hz compresso 9 dB, THD+N %.3f%%", thd);
+    CHECK(thd < 1.0, msg);
+    // tempi: dopo un salto da -40 a -6 dB, la riduzione raggiunge il 63% in circa l'attacco (10 ms)
+    {
+        Engine e; e.configure(44100, 1); e.setCompressor(true, -18.0f, 4.0f, 10.0f, 150.0f, 0.0f, 0.0f);
+        const int N = 44100;
+        std::vector<float> in(N), out;
+        for (int i = 0; i < N; i++) { const double a = i < 4410 ? 0.01 : 0.5; in[i] = static_cast<float>(a * std::sin(2 * kPi * 1000.0 * i / 44100.0)); }
+        runFloat(e, in, out, N);
+        auto env = [&](int c) { double m = 0; for (int i = c; i < c + 44; i++) m = std::max(m, (double)std::fabs(out[i])); return m; };
+        const double inEnv = 0.5;
+        auto redDb = [&](int c) { return 20 * std::log10(env(c) / inEnv); };
+        const double fin = redDb(30000);
+        // il rilevatore (8 ms) si somma all'attacco: il 63% arriva entro 25 ms e non prima di 5 ms
+        int t63 = -1; for (int i = 4410; i < 20000; i += 8) if (redDb(i) <= 0.63 * fin) { t63 = i - 4410; break; }
+        std::snprintf(msg, sizeof msg, "compressore: attacco 10 ms -> 63%% della riduzione dopo %.1f ms", t63 / 44.1);
+        CHECK(t63 > 5 * 44 && t63 < 25 * 44, msg);
+    }
+    // collegato: un solo guadagno per i due canali (immagine stabile)
+    {
+        Engine e; e.configure(44100, 2); e.setCompressor(true, -18.0f, 6.0f, 5.0f, 100.0f, 0.0f, 0.0f);
+        const int N = 44100;
+        std::vector<float> in(static_cast<size_t>(N) * 2), out;
+        for (int i = 0; i < N; i++) { in[2 * i] = static_cast<float>(0.9 * std::sin(2 * kPi * 500.0 * i / 44100.0)); in[2 * i + 1] = 0.3f * in[2 * i]; }
+        runFloat(e, in, out, N);
+        double worst = 0; for (int i = 20000; i < N; i++) if (std::fabs(in[2 * i]) > 0.1f) worst = std::max(worst, (double)std::fabs(out[2 * i + 1] / out[2 * i] - 0.3));
+        CHECK(worst < 1e-4, "compressore: stesso guadagno sui due canali (rapporto L/R invariato)");
+    }
+}
+
 int main() {
     testResample();
     testBypassBitExact();
@@ -379,6 +453,7 @@ int main() {
     testTruePeak();
     testBassHold();
     testStereo();
+    testCompressor();
     testFlushAndLongRun();
     testStability();
     testChannels();

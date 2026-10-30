@@ -30,6 +30,7 @@ Tra decoder e uscita c'è un unico processore audio che chiama un motore C++17 (
 - **Rampa dei parametri**: coefficienti dei filtri e preamp passano ai nuovi valori in circa 30 ms, senza scatti quando si regolano le manopole o si carica un preset.
 - **Bypass reale**: con equalizzatore spento e manopole al centro l'audio non viene elaborato (PCM16 bit-exact, verificato dai test nativi).
 - **Headroom** delle manopole e dell'espansione stereo (anche con l'equalizzatore spento): il rinforzo non finisce nel limiter
+- **Compressore** con soglia, rapporto, attacco, rilascio, ginocchio morbido e recupero; canali collegati (l'immagine stereo non si sposta), senza latenza, prima del limiter
 - **Stereo**: bilanciamento, espansione (sopra 1 allarga solo sopra ~150 Hz, i bassi restano al centro) e mono
 - **ReplayGain** brano/album (tag Vorbis, ID3 TXXX, iTunes, Opus R128) con protezione dal clipping tramite i tag di picco
 - **Limiter look-ahead true-peak** (5 ms, soglia -0,5 dBFS, rilascio 80 ms), attivo solo quando c'è elaborazione. Rileva anche i picchi tra un campione e l'altro (sovracampionamento x4, sinc Kaiser a 16 punti) con 8 campioni di ritardo in più e tenuta di 15 ms (niente distorsione sui bassi profondi); la stima è precisa entro circa 0,15 dB, non è un misuratore certificato ITU.

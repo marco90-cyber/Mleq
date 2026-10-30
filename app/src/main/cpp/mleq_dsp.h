@@ -212,6 +212,75 @@ private:
     float minGain_ = 1.0f;
 };
 
+// ----------------------------------------------------------------------------- compressore
+
+/**
+ * Compressore feed-forward a canali collegati (un solo guadagno per tutti: l'immagine stereo
+ * non si sposta). Rilevatore di potenza a 8 ms (calibrato sul picco di un seno) (niente ondulazione sui bassi), curva statica con
+ * ginocchio morbido (soft knee quadratico), attacco e rilascio applicati alla riduzione in dB.
+ * Nessuna latenza: il limiter che segue prende gli eventuali picchi residui.
+ */
+class Compressor {
+public:
+    void prepare(double sampleRate, int channels) {
+        sr_ = sampleRate > 1000.0 ? sampleRate : 44100.0;
+        ch_ = std::max(1, channels);
+        detC_ = 1.0 - std::exp(-1.0 / (kDetectMs * 0.001 * sr_));
+        setParams(thr_, ratio_, atkMs_, relMs_, kneeDb_, makeupDb_);
+        reset();
+    }
+
+    void setParams(float thresholdDb, float ratio, float attackMs, float releaseMs, float kneeDb, float makeupDb) {
+        thr_ = std::min(0.0f, std::max(-60.0f, thresholdDb));
+        ratio_ = std::min(20.0f, std::max(1.0f, ratio));
+        atkMs_ = std::min(100.0f, std::max(1.0f, attackMs));
+        relMs_ = std::min(1000.0f, std::max(20.0f, releaseMs));
+        kneeDb_ = std::min(24.0f, std::max(0.0f, kneeDb));
+        makeupDb_ = std::min(24.0f, std::max(0.0f, makeupDb));
+        atkC_ = 1.0 - std::exp(-1.0 / (atkMs_ * 0.001 * sr_));
+        relC_ = 1.0 - std::exp(-1.0 / (relMs_ * 0.001 * sr_));
+        makeup_ = std::pow(10.0, makeupDb_ / 20.0);
+    }
+
+    void reset() { pow_ = 0.0; grDb_ = 0.0; minGr_ = 0.0; }
+
+    /** Massima riduzione (dB, <= 0) dall'ultimo azzeramento del misuratore. */
+    float minGainDb() const { return static_cast<float>(minGr_); }
+    void resetMeter() { minGr_ = 0.0; }
+
+    void process(float* buf, int frames) {
+        const double T = thr_, R = ratio_, W = kneeDb_;
+        for (int f = 0; f < frames; f++) {
+            float* fr = buf + static_cast<size_t>(f) * ch_;
+            double p = 0.0;
+            for (int c = 0; c < ch_; c++) p = std::max(p, static_cast<double>(fr[c]) * fr[c]);
+            pow_ += detC_ * (p - pow_);
+            // x2: un seno a X dBFS di picco legge X (la potenza media di un seno e' meta' del picco^2)
+            const double xDb = pow_ > 1e-12 ? 10.0 * std::log10(2.0 * pow_) : -120.0;
+            // curva statica: uscita desiderata in dB
+            const double over = xDb - T;
+            double yDb;
+            if (2.0 * over < -W) yDb = xDb;
+            else if (W > 0.0 && 2.0 * std::fabs(over) <= W) {
+                const double k = over + W * 0.5;
+                yDb = xDb + (1.0 / R - 1.0) * k * k / (2.0 * W);
+            } else yDb = T + over / R;
+            const double target = yDb - xDb;  // <= 0
+            grDb_ += (target < grDb_ ? atkC_ : relC_) * (target - grDb_);
+            if (grDb_ < minGr_) minGr_ = grDb_;
+            const float g = static_cast<float>(std::pow(10.0, grDb_ / 20.0) * makeup_);
+            for (int c = 0; c < ch_; c++) fr[c] *= g;
+        }
+    }
+
+private:
+    static constexpr double kDetectMs = 8.0;
+    double sr_ = 44100.0, detC_ = 0.01, atkC_ = 0.01, relC_ = 0.001, makeup_ = 1.0;
+    double pow_ = 0.0, grDb_ = 0.0, minGr_ = 0.0;
+    int ch_ = 2;
+    float thr_ = -18.0f, ratio_ = 3.0f, atkMs_ = 10.0f, relMs_ = 150.0f, kneeDb_ = 6.0f, makeupDb_ = 0.0f;
+};
+
 // ----------------------------------------------------------------------------- motore
 
 class Engine {
@@ -224,6 +293,7 @@ public:
         rampLeft_ = 0;
         limiter_.prepare(sr_, ch_, lookaheadMs_);
         limiter_.setParams(thrDb_, relMs_);
+        comp_.prepare(sr_, ch_);
         limiterReady_ = true;
         rsOn_ = false;
     }
@@ -247,6 +317,15 @@ public:
         }
         pre_ = preGain;
     }
+
+    void setCompressor(bool on, float thresholdDb, float ratio, float attackMs, float releaseMs, float kneeDb, float makeupDb) {
+        comp_.setParams(thresholdDb, ratio, attackMs, releaseMs, kneeDb, makeupDb);
+        if (on && !compOn_) comp_.reset();
+        compOn_ = on;
+    }
+
+    float compressorMinGainDb() const { return comp_.minGainDb(); }
+    void resetCompressorMeter() { comp_.resetMeter(); }
 
     void setLimiter(bool on, float thresholdDb, float releaseMs, float lookaheadMs) {
         thrDb_ = thresholdDb;
@@ -277,6 +356,7 @@ public:
         preCur_ = pre_;
         rampLeft_ = 0;
         limiter_.reset();
+        comp_.reset();
         if (rsOn_) rs_.reset();
     }
 
@@ -302,6 +382,7 @@ public:
         decode(in, inEnc, n);
         if (!bypass) {
             runFilters(frames);
+            if (compOn_) comp_.process(scratch_.data(), frames);
             if (limiterOn_) limiter_.process(scratch_.data(), frames);
         }
         const bool dither = !bypass || inEnc != kEncPcm16 || rsOn_;
@@ -546,6 +627,8 @@ private:
     bool rsOn_ = false;
     Limiter limiter_;
     bool limiterOn_ = false, limiterReady_ = false;
+    Compressor comp_;
+    bool compOn_ = false;
     float thrDb_ = -0.5f, relMs_ = 80.0f, lookaheadMs_ = 5.0f;
     uint32_t rng_ = 2463534242u;
     double balT_ = 0.0, widthT_ = 1.0, lg_ = 1.0, rg_ = 1.0, wid_ = 1.0, stLow_ = 0.0;

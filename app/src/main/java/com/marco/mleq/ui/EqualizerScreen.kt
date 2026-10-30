@@ -741,6 +741,7 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
                 onCheckedChange = { on -> env.feedback.tapScreen(); settings.updateEq { it.copy(faithful = on) } }
             )
         }
+        CompressorSection(env, eq)
         Column {
             Text("ReplayGain", color = Color.White, fontSize = 14.sp)
             val rg = env.engine.eqProcessor.info.replayGainDb
@@ -770,6 +771,55 @@ private fun ParamsPanel(env: AppEnv, eq: EqConfig) {
             "Valori esatti: tocca la frequenza sotto uno slider (frequenza, guadagno, Q e tipo di filtro).",
             color = Color(0xFF7C828C), fontSize = 11.sp
         )
+    }
+}
+
+@Composable
+private fun CompressorSection(env: AppEnv, eq: EqConfig) {
+    val settings = env.settings
+    val red by produceState(0f) {
+        while (true) {
+            value = env.engine.eqProcessor.compressorReductionDb(true)
+            delay(400)
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Compressore", color = Color.White, fontSize = 14.sp)
+                Text(
+                    if (!eq.compressorOn) "Riduce la differenza tra parti forti e deboli"
+                    else if (red > -0.05f) "nessuna riduzione" else String.format(Locale.ITALY, "riduzione fino a %.1f dB", -red),
+                    color = Color(0xFF7C828C), fontSize = 11.sp
+                )
+            }
+            NeonSwitch(
+                checked = eq.compressorOn,
+                onCheckedChange = { on -> env.feedback.tapScreen(); settings.updateEq { it.copy(compressorOn = on) } }
+            )
+        }
+        if (eq.compressorOn) {
+            @Composable
+            fun line(label: String, value: Float, range: ClosedFloatingPointRange<Float>, step: Float, unit: String, set: (EqConfig, Float) -> EqConfig) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$label ${String.format(Locale.ITALY, if (step < 1f) "%.1f" else "%.0f", value)} $unit",
+                        color = Color(0xFFDDE1EA), fontSize = 12.sp, modifier = Modifier.width(112.dp)
+                    )
+                    NeonSlider(
+                        value = value, valueRange = range,
+                        onValueChange = { v -> settings.updateEq { set(it, (v / step).roundToInt() * step) } },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            line("Soglia", eq.compThresholdDb, -60f..0f, 1f, "dB") { c, v -> c.copy(compThresholdDb = v) }
+            line("Rapporto", eq.compRatio, 1f..20f, 0.5f, ": 1") { c, v -> c.copy(compRatio = v) }
+            line("Attacco", eq.compAttackMs, 1f..100f, 1f, "ms") { c, v -> c.copy(compAttackMs = v) }
+            line("Rilascio", eq.compReleaseMs, 20f..1000f, 10f, "ms") { c, v -> c.copy(compReleaseMs = v) }
+            line("Ginocchio", eq.compKneeDb, 0f..24f, 1f, "dB") { c, v -> c.copy(compKneeDb = v) }
+            line("Recupero", eq.compMakeupDb, 0f..24f, 0.5f, "dB") { c, v -> c.copy(compMakeupDb = v) }
+        }
     }
 }
 

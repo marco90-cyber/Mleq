@@ -391,4 +391,17 @@ class EqMathTest {
         assertEquals(-20 * Math.log10(1.5), wide.effectivePreampDb(48000.0), 1e-9)
         assertEquals(0.0, wide.copy(toneHeadroom = false).effectivePreampDb(48000.0), 1e-9)
     }
+
+    @Test
+    fun compressorSettingsActivateDspAndRoundTrip() {
+        val base = EqConfig()
+        assertFalse(base.dspActive())
+        val c = base.copy(compressorOn = true, compThresholdDb = -24f, compRatio = 4.5f, compAttackMs = 7f, compReleaseMs = 220f, compKneeDb = 9f, compMakeupDb = 3f)
+        assertTrue(c.dspActive())
+        assertEquals(c, EqConfig.fromJson(c.toJson()))
+        val wild = EqConfig.fromJson("""{"comp":true,"compThr":-99,"compRatio":99,"compAtk":0,"compRel":9999,"compKnee":99,"compMakeup":99}""")
+        assertEquals(-60f, wild.compThresholdDb, 0f); assertEquals(20f, wild.compRatio, 0f)
+        assertEquals(1f, wild.compAttackMs, 0f); assertEquals(1000f, wild.compReleaseMs, 0f)
+        assertEquals(24f, wild.compKneeDb, 0f); assertEquals(24f, wild.compMakeupDb, 0f)
+    }
 }

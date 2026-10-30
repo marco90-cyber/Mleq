@@ -33,6 +33,19 @@ JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeDsp_nSetLimiter(JNIEnv*, 
     reinterpret_cast<Engine*>(h)->setLimiter(on == JNI_TRUE, thr, rel, look);
 }
 
+JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeDsp_nSetCompressor(JNIEnv*, jobject, jlong h, jboolean on,
+                                                                          jfloat thr, jfloat ratio, jfloat atk,
+                                                                          jfloat rel, jfloat knee, jfloat makeup) {
+    reinterpret_cast<Engine*>(h)->setCompressor(on == JNI_TRUE, thr, ratio, atk, rel, knee, makeup);
+}
+
+JNIEXPORT jfloat JNICALL Java_com_marco_mleq_audio_NativeDsp_nCompressorGainDb(JNIEnv*, jobject, jlong h, jboolean reset) {
+    auto* e = reinterpret_cast<Engine*>(h);
+    const float v = e->compressorMinGainDb();
+    if (reset == JNI_TRUE) e->resetCompressorMeter();
+    return v;
+}
+
 JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeDsp_nSetStereo(JNIEnv*, jobject, jlong h, jfloat bal,
                                                                        jfloat width) {
     reinterpret_cast<Engine*>(h)->setStereo(bal, width);

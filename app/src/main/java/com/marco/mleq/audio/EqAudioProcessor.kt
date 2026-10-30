@@ -84,6 +84,9 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
     /** Massima riduzione del limiter dall'ultima lettura (dB). */
     fun limiterReductionDb(reset: Boolean = true): Float = dsp.limiterReductionDb(reset)
 
+    /** Massima riduzione del compressore dall'ultima lettura (dB). */
+    fun compressorReductionDb(reset: Boolean = true): Float = dsp.compressorReductionDb(reset)
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (!dsp.isReady) return AudioProcessor.AudioFormat.NOT_SET
         val enc = inputAudioFormat.encoding
@@ -157,6 +160,10 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
         stageCount = list.size
         dsp.setFilters(flat, list.size, preGain)
         dsp.setStereo(cfg.balanceFactor(), cfg.widthFactor())
+        dsp.setCompressor(
+            cfg.compressorOn, cfg.compThresholdDb, cfg.compRatio, cfg.compAttackMs,
+            cfg.compReleaseMs, cfg.compKneeDb, cfg.compMakeupDb
+        )
 
         val active = cfg.dspActive() || kotlin.math.abs(rgDb) > 0.01
         bypass = !active

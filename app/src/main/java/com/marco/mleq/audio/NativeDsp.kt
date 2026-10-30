@@ -24,6 +24,13 @@ class NativeDsp {
         if (handle != 0L) nSetLimiter(handle, on, thresholdDb, releaseMs, lookaheadMs)
     }
 
+    fun setCompressor(on: Boolean, thr: Float, ratio: Float, atk: Float, rel: Float, knee: Float, makeup: Float) {
+        if (handle != 0L) nSetCompressor(handle, on, thr, ratio, atk, rel, knee, makeup)
+    }
+
+    /** Massima riduzione del compressore dall'ultima lettura (dB, <= 0). */
+    fun compressorReductionDb(reset: Boolean): Float = if (handle != 0L) nCompressorGainDb(handle, reset) else 0f
+
     /** [balance] -1..1, [width] 0..2 (0 = mono). */
     fun setStereo(balance: Float, width: Float) {
         if (handle != 0L) nSetStereo(handle, balance, width)
@@ -67,6 +74,8 @@ class NativeDsp {
     private external fun nConfigure(h: Long, sr: Int, ch: Int)
     private external fun nSetFilters(h: Long, coefs: DoubleArray, stages: Int, preGain: Double)
     private external fun nSetLimiter(h: Long, on: Boolean, thr: Float, rel: Float, look: Float)
+    private external fun nSetCompressor(h: Long, on: Boolean, thr: Float, ratio: Float, atk: Float, rel: Float, knee: Float, makeup: Float)
+    private external fun nCompressorGainDb(h: Long, reset: Boolean): Float
     private external fun nSetStereo(h: Long, bal: Float, width: Float)
     private external fun nReset(h: Long)
     private external fun nSetResample(h: Long, outRate: Int)
