@@ -28,11 +28,25 @@ android {
         }
     }
 
+    // Firma: chiave privata dai segreti di GitHub (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD).
+    // Serve una firma sempre uguale perché gli aggiornamenti in app si installino sopra la versione precedente.
+    // Se i segreti non ci sono, si usa la chiave di debug.
+    val appKeystore = System.getenv("APP_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (appKeystore != null) {
+            create("private") {
+                storeFile = appKeystore
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Firmato con la chiave di debug: l'APK è subito installabile sul telefono.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (appKeystore != null) signingConfigs.getByName("private") else signingConfigs.getByName("debug")
         }
     }
 

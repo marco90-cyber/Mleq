@@ -312,6 +312,7 @@ fun EqualizerScreen(env: AppEnv) {
                             MenuRow("Analizzatore") { env.overlay = Overlay.Analyzer; moreMenu = false }
                             MenuRow("Uscita audio") { env.overlay = Overlay.Output; moreMenu = false }
                             MenuRow("Log di debug") { env.overlay = Overlay.Log; moreMenu = false }
+                            MenuRow("Aggiornamenti") { com.marco.mleq.AppUpdate.open(env.app); moreMenu = false }
                         }
                     }
                 }

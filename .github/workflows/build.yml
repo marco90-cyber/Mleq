@@ -50,8 +50,25 @@ jobs:
           fi
           exit $st
 
+      - name: Prepara la firma privata
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/app.jks"
+            echo "APP_KEYSTORE=$RUNNER_TEMP/app.jks" >> "$GITHUB_ENV"
+            echo "Firma: chiave privata"
+          else
+            echo "::warning::Segreto KEYSTORE_BASE64 assente: APK firmato con la chiave di debug (gli aggiornamenti in app non si potranno installare sopra)"
+          fi
+
       - name: Compila APK (release)
         shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set +e
           gradle :app:assembleRelease --stacktrace 2>&1 | tee out_build.txt
