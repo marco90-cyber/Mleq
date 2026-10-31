@@ -122,15 +122,25 @@ class AudioEngine(
             }
         })
 
-        eqProcessor.setConfig(settings.eq)
-        var lastRgMode = settings.eq.replayGain
-        settings.onEqChanged = { cfg ->
-            eqProcessor.setConfig(cfg)
+        eqProcessor.setSettings(settings.dsp)
+        var lastRgMode = settings.dsp.replayGain
+        settings.onDspChanged = { cfg ->
+            eqProcessor.setSettings(cfg)
             if (cfg.replayGain != lastRgMode) {
                 lastRgMode = cfg.replayGain
                 if (cfg.replayGain != ReplayGain.OFF) planScans()
             }
         }
+        // Mobile Bass agisce solo sull'altoparlante; la loudness segue il volume del telefono
+        eqProcessor.speaker = outputMonitor.kind == OutKind.Speaker
+        outputMonitor.onKindChanged = { k -> eqProcessor.speaker = k == OutKind.Speaker }
+        updateListenVolume()
+        app.contentResolver.registerContentObserver(
+            android.provider.Settings.System.CONTENT_URI, true,
+            object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) = updateListenVolume()
+            }
+        )
 
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
@@ -222,9 +232,36 @@ class AudioEngine(
         }
     }
 
+    /** Volume multimediale del telefono come fattore lineare (0 dB = 1). */
+    private fun updateListenVolume() {
+        try {
+            val am = app.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val idx = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+            val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val db = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                am.getStreamVolumeDb(android.media.AudioManager.STREAM_MUSIC, idx, outputDeviceType())
+            } else {
+                // stima: la scala di Android copre circa 60 dB
+                if (idx == 0) -60f else -60f * (1f - idx.toFloat() / max)
+            }
+            eqProcessor.listenVolume = if (db.isFinite()) Math.pow(10.0, db.coerceIn(-80f, 0f) / 20.0) else 1.0
+        } catch (_: Throwable) {
+            eqProcessor.listenVolume = 1.0
+        }
+    }
+
+    private fun outputDeviceType(): Int = when (outputMonitor.kind) {
+        OutKind.Speaker -> android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        OutKind.Wired -> android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+        OutKind.Bluetooth -> android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+        OutKind.Usb -> android.media.AudioDeviceInfo.TYPE_USB_HEADSET
+        OutKind.Hdmi -> android.media.AudioDeviceInfo.TYPE_HDMI
+        OutKind.Other -> android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+    }
+
     /** Analizza il brano attuale e il successivo (se mancano nella cache), in background. */
     private fun planScans() {
-        if (settings.eq.replayGain == ReplayGain.OFF) {
+        if (settings.dsp.replayGain == ReplayGain.OFF) {
             scanningCurrent = false
             return
         }

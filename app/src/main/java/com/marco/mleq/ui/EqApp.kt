@@ -42,11 +42,13 @@ fun EqApp(env: AppEnv) {
         }
 
         Box(Modifier.fillMaxSize().background(Ml.background)) {
-            EqualizerScreen(env)
+            MainScreen(env)
 
             OverlayHost(env, env.overlay == Overlay.Analyzer) { AnalyzerOverlay(env) }
             OverlayHost(env, env.overlay == Overlay.Output) { OutputScreen(env) }
             OverlayHost(env, env.overlay == Overlay.Log) { LogScreen(env) }
+            OverlayHost(env, env.overlay == Overlay.Graphic) { GraphicEqScreen(env) }
+            OverlayHost(env, env.overlay == Overlay.Parametric) { ParametricEqScreen(env) }
         }
         com.marco.mleq.AppUpdateHost()
     }

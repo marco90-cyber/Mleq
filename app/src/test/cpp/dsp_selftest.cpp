@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Test nativi del motore DSP, compilabili sul computer: g++ -std=c++17 -O2 dsp_selftest.cpp
+// Test nativi del motore DSP di MLEqualizer: g++ -std=c++17 -O2 dsp_selftest.cpp <oggetti soxr> -lm
+// Ogni modulo e' verificato con misure (livelli, risposta, distorsione), non a orecchio.
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
+#include <string>
 
-#include "../../main/cpp/mleq_dsp.h"
+#include "../../main/cpp/dsp_engine.h"
 #include "../../main/cpp/mleq_loudness.h"
 
 using namespace mleq;
@@ -16,149 +19,393 @@ static int failures = 0;
         else std::printf("ok:   %s\n", msg);                          \
     } while (0)
 
-static const double kPi = 3.14159265358979323846;
+static char M[300];
+#define MSG(...) (std::snprintf(M, sizeof M, __VA_ARGS__), M)
 
-// Biquad peaking (RBJ) uguale a quello Kotlin, per provare la catena nativa.
-static void peaking(double fs, double f, double q, double gdb, double* c) {
-    const double a = std::pow(10.0, gdb / 40.0), w0 = 2 * kPi * f / fs, al = std::sin(w0) / (2 * q), cs = std::cos(w0);
-    const double a0 = 1 + al / a;
-    c[0] = (1 + al * a) / a0; c[1] = -2 * cs / a0; c[2] = (1 - al * a) / a0;
-    c[3] = -2 * cs / a0;      c[4] = (1 - al / a) / a0;
-}
+static const std::string ON = "master=1;lim=0;headroom=0;";
 
-static void testBypassBitExact() {
-    Engine e; e.configure(44100, 2);
-    std::mt19937 rng(1);
-    const int frames = 1000;
-    std::vector<int16_t> in(frames * 2), out(frames * 2);
-    for (auto& v : in) v = static_cast<int16_t>(static_cast<int>(rng() % 65536) - 32768);
-    e.process(reinterpret_cast<uint8_t*>(in.data()), kEncPcm16, frames, reinterpret_cast<uint8_t*>(out.data()), kEncPcm16, true);
-    CHECK(in == out, "bypass PCM16 e' bit-exact");
-}
+// ---------------------------------------------------------------- strumenti di misura
 
-static void testPcm24ToFloat() {
-    Engine e; e.configure(96000, 2);
-    const int frames = 4;
-    // 24 bit little endian: +max, -max, 0, 0x400000 (0.5)
-    uint8_t in[frames * 2 * 3] = {0xFF,0xFF,0x7F, 0x00,0x00,0x80, 0,0,0, 0,0,0x40, 0,0,0, 0,0,0, 0,0,0, 0,0,0};
-    float out[frames * 2];
-    e.process(in, kEncPcm24, frames, reinterpret_cast<uint8_t*>(out), kEncFloat, true);
-    CHECK(std::fabs(out[0] - 8388607.0f / 8388608.0f) < 1e-9f, "PCM24 +max -> float esatto");
-    CHECK(out[1] == -1.0f, "PCM24 -max -> -1.0");
-    CHECK(out[3] == 0.5f, "PCM24 0x400000 -> 0.5");
-}
-
-static double measureGainDb(double f, double gdb, double q) {
-    const double fs = 48000.0;
-    Engine e; e.configure(48000, 2);
-    double c[5]; peaking(fs, f, q, gdb, c);
-    e.setFilters(c, 1, 1.0);
-    const int frames = 48000;
-    std::vector<float> in(frames * 2), out(frames * 2);
-    for (int i = 0; i < frames; i++) in[2 * i] = in[2 * i + 1] = static_cast<float>(0.1 * std::sin(2 * kPi * f * i / fs));
-    e.process(reinterpret_cast<uint8_t*>(in.data()), kEncFloat, frames, reinterpret_cast<uint8_t*>(out.data()), kEncFloat, false);
-    double pi = 0, po = 0;
-    for (int i = frames / 2; i < frames; i++) { pi += in[2*i] * in[2*i]; po += out[2*i] * out[2*i]; }
-    return 10 * std::log10(po / pi);
-}
-
-static void testFilterGain() {
-    CHECK(std::fabs(measureGainDb(1000, 6, 1.0) - 6.0) < 0.05, "peaking +6 dB a 1 kHz");
-    CHECK(std::fabs(measureGainDb(1000, -9, 2.0) + 9.0) < 0.05, "peaking -9 dB a 1 kHz, Q 2");
-    CHECK(std::fabs(measureGainDb(60, 12, 0.7) - 12.0) < 0.1, "peaking +12 dB a 60 Hz");
-    CHECK(std::fabs(measureGainDb(18000, 12, 5.0) - 12.0) < 0.2, "peaking +12 dB a 18 kHz, Q 5");
-}
-
-static void testLimiter() {
-    const double fs = 44100.0;
-    Engine e; e.configure(44100, 2);
-    e.setLimiter(true, -1.0f, 80.0f, 5.0f);
-    const float thr = std::pow(10.0f, -1.0f / 20.0f);
-    const int frames = 44100 * 3;
-    std::vector<float> in(frames * 2), out(frames * 2);
-    std::mt19937 rng(7);
-    std::uniform_real_distribution<float> noise(-1.0f, 1.0f);
+static std::vector<float> sine(int sr, int ch, double f, double amp, int frames, double phase = 0) {
+    std::vector<float> x(static_cast<size_t>(frames) * ch);
     for (int i = 0; i < frames; i++) {
-        float env = (i / 11025) % 2 ? 2.5f : 0.3f;                  // salti improvvisi di livello
-        float s = env * std::sin(2 * kPi * 80.0 * i / fs) + 0.2f * noise(rng);
-        in[2 * i] = s; in[2 * i + 1] = 0.5f * s;
+        const float v = static_cast<float>(amp * std::sin(2 * kPi * f * i / sr + phase));
+        for (int c = 0; c < ch; c++) x[static_cast<size_t>(i) * ch + c] = v;
     }
-    // elabora a blocchi di dimensione irregolare
-    int pos = 0; const int sizes[] = {1, 7, 480, 1024, 333, 4096};
-    int k = 0;
-    while (pos < frames) {
-        int n = std::min(sizes[k++ % 6], frames - pos);
-        e.process(reinterpret_cast<uint8_t*>(&in[2 * pos]), kEncFloat, n, reinterpret_cast<uint8_t*>(&out[2 * pos]), kEncFloat, false);
-        pos += n;
-    }
-    float mx = 0;
-    for (float v : out) mx = std::max(mx, std::fabs(v));
-    CHECK(mx <= thr + 1e-4f, "limiter: nessun campione oltre la soglia (-1 dBFS)");
-    CHECK(e.latencyFrames() > 0 && e.latencyFrames() < 400, "limiter: latenza look-ahead ragionevole");
-
-    // segnale sotto soglia: guadagno unitario, solo ritardo
-    Engine q; q.configure(44100, 2);
-    q.setLimiter(true, -1.0f, 80.0f, 5.0f);
-    std::vector<float> a(4000 * 2), b(4000 * 2);
-    for (int i = 0; i < 4000; i++) a[2*i] = a[2*i+1] = 0.4f * std::sin(2 * kPi * 440.0 * i / fs);
-    q.process(reinterpret_cast<uint8_t*>(a.data()), kEncFloat, 4000, reinterpret_cast<uint8_t*>(b.data()), kEncFloat, false);
-    const int d = q.latencyFrames();
-    double err = 0;
-    for (int i = d; i < 4000; i++) err = std::max(err, (double)std::fabs(b[2*i] - a[2*(i - d)]));
-    CHECK(err < 1e-6, "limiter trasparente sotto soglia (solo ritardo)");
+    return x;
 }
 
-static void testFlushAndLongRun() {
-    Engine e; e.configure(44100, 2);
-    e.setLimiter(true, -0.5f, 80.0f, 5.0f);
-    std::vector<float> a(512 * 2, 0.5f), b(512 * 2);
-    e.process(reinterpret_cast<uint8_t*>(a.data()), kEncFloat, 512, reinterpret_cast<uint8_t*>(b.data()), kEncFloat, false);
-    std::vector<float> t(1024 * 2);
-    int n = e.flush(reinterpret_cast<uint8_t*>(t.data()), kEncFloat, 1024);
-    CHECK(n == e.latencyFrames(), "flush restituisce esattamente la latenza");
-    double tail = 0; for (int i = 0; i < n * 2; i++) tail += std::fabs(t[i]);
-    CHECK(tail > 0, "flush contiene la coda del segnale");
+static void runE(Engine& e, std::vector<float>& x, int ch) {
+    const int frames = static_cast<int>(x.size() / ch);
+    for (int pos = 0; pos < frames; pos += 1024) e.processFloat(&x[static_cast<size_t>(pos) * ch], std::min(1024, frames - pos));
 }
 
-static void testStability() {
-    Engine e; e.configure(8000, 2);
-    double c[5 * 3];
-    peaking(8000, 3500, 0.1, 12, c);
-    peaking(8000, 20, 20, -12, c + 5);
-    peaking(8000, 100, 0.3, 12, c + 10);
-    e.setFilters(c, 3, 3.98);
-    std::vector<float> in(8000 * 2), out(8000 * 2);
-    std::mt19937 rng(3); std::uniform_real_distribution<float> n(-1, 1);
-    for (auto& v : in) v = n(rng);
-    e.process(reinterpret_cast<uint8_t*>(in.data()), kEncFloat, 8000, reinterpret_cast<uint8_t*>(out.data()), kEncFloat, false);
-    bool fin = true; for (float v : out) if (!std::isfinite(v)) fin = false;
-    CHECK(fin, "valori estremi di Q/gain/frequenza: nessun NaN/Inf");
+// ampiezza della componente a frequenza f nel canale c, dal campione 'from'
+static double amplitude(const std::vector<float>& x, int ch, int c, int sr, double f, int from) {
+    double s = 0, k = 0; const int n = static_cast<int>(x.size() / ch);
+    for (int i = from; i < n; i++) { const double t = 2 * kPi * f * i / sr; s += x[static_cast<size_t>(i) * ch + c] * std::sin(t); k += x[static_cast<size_t>(i) * ch + c] * std::cos(t); }
+    return 2.0 * std::sqrt(s * s + k * k) / (n - from);
 }
 
-static void testChannels() {
-    for (int ch : {1, 2, 6}) {
-        Engine e; e.configure(48000, ch);
-        e.setLimiter(true, -1.0f, 80.0f, 5.0f);
-        std::vector<float> in(1000 * ch, 1.5f), out(1000 * ch);
-        e.process(reinterpret_cast<uint8_t*>(in.data()), kEncFloat, 1000, reinterpret_cast<uint8_t*>(out.data()), kEncFloat, false);
-        float mx = 0; for (float v : out) mx = std::max(mx, std::fabs(v));
-        char m[64]; std::snprintf(m, sizeof m, "%d canali: uscita entro 0 dBFS", ch);
-        CHECK(mx <= 1.0f, m);
+static double gainDbAt(const std::string& params, double f, double ampDb = -20, int sr = 48000) {
+    Engine e; e.configure(sr, 2); e.setParams(params.c_str());
+    const double a = std::pow(10.0, ampDb / 20.0);
+    auto x = sine(sr, 2, f, a, sr * 2);
+    runE(e, x, 2);
+    return 20 * std::log10(amplitude(x, 2, 0, sr, f, sr) / a);
+}
+
+static double thdPct(const std::vector<float>& x, int ch, int sr, double f, int from) {
+    const int n = static_cast<int>(x.size() / ch);
+    double s = 0, k = 0;
+    for (int i = from; i < n; i++) { const double t = 2 * kPi * f * i / sr; s += x[static_cast<size_t>(i) * ch] * std::sin(t); k += x[static_cast<size_t>(i) * ch] * std::cos(t); }
+    s *= 2.0 / (n - from); k *= 2.0 / (n - from);
+    double res = 0, sig = 0;
+    for (int i = from; i < n; i++) {
+        const double t = 2 * kPi * f * i / sr, fit = s * std::sin(t) + k * std::cos(t);
+        const double v = x[static_cast<size_t>(i) * ch];
+        res += (v - fit) * (v - fit); sig += fit * fit;
     }
+    return 100 * std::sqrt(res / sig);
 }
 
 static double rmsOf(const std::vector<int16_t>& v, size_t skip) {
-    // esclude transitorio iniziale e finale del filtro (skip frame stereo per lato)
-    double a = 0; size_t n = 0;
-    for (size_t i = skip * 2; i + skip * 2 < v.size(); i++) { a += double(v[i]) * v[i]; n++; }
-    return std::sqrt(a / n) / 32768.0;
+    double s = 0; size_t n = 0;
+    for (size_t i = skip * 2; i < v.size(); i += 2) { const double x = v[i] / 32768.0; s += x * x; n++; }
+    return n ? std::sqrt(s / n) : 0;
+}
+
+static std::string peqBand(int i, int on, int type, double f, double g, double q) {
+    char b[96]; std::snprintf(b, sizeof b, "peq.%d=%d,%d,%g,%g,%g;", i, on, type, f, g, q); return b;
+}
+
+static std::string peqOnly(int type, double f, double g, double q) {
+    std::string s = ON + "eq=2;";
+    for (int i = 0; i < kParamBands; i++) s += peqBand(i, i == 0, type, f, g, q);
+    return s;
+}
+
+// ---------------------------------------------------------------- test
+
+static void testBypass() {
+    Engine e; e.configure(44100, 2); e.setParams("master=0;bass=10;eq=1;geq.3=6");
+    std::mt19937 rng(1);
+    std::vector<int16_t> in(4096 * 2), out(4096 * 2);
+    for (auto& v : in) v = static_cast<int16_t>(static_cast<int>(rng() % 65536) - 32768);
+    e.process(reinterpret_cast<uint8_t*>(in.data()), kEncPcm16, 4096, reinterpret_cast<uint8_t*>(out.data()), kEncPcm16);
+    CHECK(in == out, "master spento: PCM16 bit-exact");
+    // master acceso ma tutto neutro (limiter spento): float identico
+    Engine z; z.configure(48000, 2); z.setParams(ON.c_str());
+    auto x = sine(48000, 2, 1000, 0.5, 4800), y = x;
+    runE(z, y, 2);
+    double d = 0; for (size_t i = 0; i < x.size(); i++) d = std::max(d, (double)std::fabs(x[i] - y[i]));
+    CHECK(d < 1e-7, MSG("master acceso, tutto neutro: uscita identica (diff %.1e)", d));
+}
+
+static void testPcm24() {
+    Engine e; e.configure(48000, 1); e.setParams("master=0");
+    const uint8_t in[12] = {0xFF, 0xFF, 0x7F, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40};
+    float out[4];
+    e.process(in, kEncPcm24, 4, reinterpret_cast<uint8_t*>(out), kEncFloat);
+    CHECK(std::fabs(out[0] - 8388607.0f / 8388608.0f) < 1e-9f && out[1] == -1.0f && out[3] == 0.5f, "PCM24 -> float esatto");
+}
+
+static void testFilters() {
+    // campana: guadagno esatto al centro, anche vicino a Nyquist
+    for (double f : {100.0, 1000.0, 15000.0}) {
+        const double g = gainDbAt(peqOnly(kPeak, f, 9, 2), f);
+        CHECK(std::fabs(g - 9) < 0.05, MSG("EQ param.: campana +9 dB a %.0f Hz -> %.3f dB", f, g));
+    }
+    double g = gainDbAt(peqOnly(kPeak, 1000, -12, 4), 1000);
+    CHECK(std::fabs(g + 12) < 0.05, MSG("EQ param.: campana -12 dB Q4 -> %.3f dB", g));
+    // shelf con Q
+    g = gainDbAt(peqOnly(kLowShelf, 200, 8, 0.707), 30);
+    CHECK(std::fabs(g - 8) < 0.3, MSG("shelf bassi +8 dB a 200 Hz: a 30 Hz %.2f dB", g));
+    g = gainDbAt(peqOnly(kHighShelf, 4000, -6, 0.707), 18000);
+    CHECK(std::fabs(g + 6) < 0.4, MSG("shelf alti -6 dB a 4 kHz: a 18 kHz %.2f dB", g));
+    // passa-basso / passa-alto: -3 dB al taglio con Q 0,707
+    g = gainDbAt(peqOnly(kLowPass, 2000, 0, 0.7071), 2000);
+    CHECK(std::fabs(g + 3.01) < 0.05, MSG("passa-basso 2 kHz Q 0,707: %.2f dB al taglio", g));
+    g = gainDbAt(peqOnly(kHighPass, 200, 0, 0.7071), 200);
+    CHECK(std::fabs(g + 3.01) < 0.05, MSG("passa-alto 200 Hz Q 0,707: %.2f dB al taglio", g));
+    g = gainDbAt(peqOnly(kHighPass, 200, 0, 0.7071), 50);
+    CHECK(g < -23.0, MSG("passa-alto 200 Hz: a 50 Hz %.1f dB (12 dB/ottava)", g));
+    g = gainDbAt(peqOnly(kBandPass, 1000, 0, 2), 1000);
+    CHECK(std::fabs(g) < 0.05, MSG("passa-banda: 0 dB al centro (%.3f)", g));
+    g = gainDbAt(peqOnly(kNotch, 1000, 0, 2), 1000);
+    CHECK(g < -40, MSG("notch: %.0f dB al centro", g));
+    bool flat = true;
+    for (double f : {50.0, 900.0, 1000.0, 1200.0, 12000.0}) flat &= std::fabs(gainDbAt(peqOnly(kAllPass, 1000, 0, 1), f)) < 0.02;
+    CHECK(flat, "passa-tutto: modulo piatto a ogni frequenza");
+}
+
+static void testGraphic() {
+    std::string base = ON + "eq=1;";
+    for (int i = 0; i < kGraphicBands; i++) base += "geq." + std::to_string(i) + "=6;";
+    double over = 0;
+    for (int i = 0; i < kGraphicBands; i++) over = std::max(over, gainDbAt(base, kGraphicFreqs[i]));
+    CHECK(over > 7.0, MSG("EQ grafico senza compensazione: bande vicine si sommano (%.1f dB con cursori a +6)", over));
+    double worst = 0;
+    for (int i = 1; i < kGraphicBands - 1; i++) worst = std::max(worst, std::fabs(gainDbAt(base + "geq.faithful=1;", kGraphicFreqs[i]) - 6.0));
+    CHECK(worst < 0.15, MSG("EQ grafico, curva fedele: tutte le bande a +6 entro %.2f dB", worst));
+}
+
+static void testTone() {
+    // toni come Poweramp: bassi 90 Hz Q 0,8, alti 10 kHz Q 0,6
+    double g = gainDbAt(ON + "bass=10;", 25);
+    CHECK(std::fabs(g - 10) < 0.6, MSG("toni: bassi +10 dB -> %.2f dB a 25 Hz", g));
+    g = gainDbAt(ON + "bass=10;", 1000);
+    CHECK(std::fabs(g) < 0.2, MSG("toni: bassi +10 dB -> %.2f dB a 1 kHz", g));
+    g = gainDbAt(ON + "treble=10;", 19000);
+    const double ideal = 20 * std::log10(design::analogShelf(std::pow(10.0, 10 / 40.0), 1 / 0.6, false, 1.9));
+    CHECK(std::fabs(g - ideal) < 0.3, MSG("toni: alti +10 dB Q 0,6 -> %.2f dB a 19 kHz (curva analogica %.2f)", g, ideal));
+    g = gainDbAt(ON + "treble=10;", 500);
+    CHECK(std::fabs(g) < 0.2, MSG("toni: alti +10 dB -> %.2f dB a 500 Hz", g));
+    // Q diverso = pendenza diversa
+    const double wide = gainDbAt(ON + "bass=10;bass.q=0.3;", 250), steep = gainDbAt(ON + "bass=10;bass.q=2;", 250);
+    CHECK(wide > steep + 1.0, MSG("toni: Q 0,3 piu' largo di Q 2 a 250 Hz (%.1f contro %.1f dB)", wide, steep));
+}
+
+static void testRamp() {
+    Engine e; e.configure(48000, 1); e.setParams((ON + "eq=2;" + peqBand(0, 1, kPeak, 1000, 0, 1)).c_str());
+    auto x = sine(48000, 1, 1000, 0.3, 48000);
+    runE(e, x, 1);
+    e.setParams((ON + "eq=2;" + peqBand(0, 1, kPeak, 1000, -12, 1) + "pre=-6").c_str());
+    auto y = sine(48000, 1, 1000, 0.3, 4800);
+    runE(e, y, 1);
+    double step = 0; for (size_t i = 1; i < y.size(); i++) step = std::max(step, (double)std::fabs(y[i] - y[i - 1]));
+    CHECK(step < 0.05, MSG("rampa: cambio brusco di EQ e preamp senza scatti (passo max %.3f, seno 0,039)", step));
+}
+
+static void testHeadroom() {
+    // bassi +10 dB, headroom automatico: un seno a -1 dBFS a 40 Hz non deve finire nel limiter
+    Engine e; e.configure(48000, 2); e.setParams("master=1;bass=10;headroom=1;lim=1");
+    auto x = sine(48000, 2, 40, 0.89, 48000 * 2);
+    runE(e, x, 2);
+    double out[5]; (void)out;
+    CHECK(e.headroomDb() > 9.5, MSG("headroom: rinforzo massimo %.2f dB compensato", e.headroomDb()));
+    CHECK(e.limiterMinGainDb() > -0.3, MSG("headroom: limiter quasi inattivo (%.2f dB)", e.limiterMinGainDb()));
+}
+
+static void testLimiter() {
+    Engine e; e.configure(44100, 2); e.setParams("master=1;lim=1;lim.thr=-1;headroom=0;pre=12");
+    std::mt19937 rng(3); std::normal_distribution<double> nd(0, 0.3);
+    std::vector<float> x(44100 * 2 * 2);
+    for (auto& v : x) v = static_cast<float>(nd(rng));
+    runE(e, x, 2);
+    double mx = 0; for (size_t i = 8000; i < x.size(); i++) mx = std::max(mx, (double)std::fabs(x[i]));
+    CHECK(mx <= std::pow(10.0, -1 / 20.0) + 1e-4, MSG("limiter: rumore +12 dB, picco %.4f entro la soglia -1 dBFS", mx));
+    // true peak: fs/4 con fase 45 gradi
+    Engine t; t.configure(44100, 2); t.setParams("master=1;lim=1;lim.thr=-1;headroom=0");
+    auto s = sine(44100, 2, 11025, 1.273, 44100, kPi / 4);
+    runE(t, s, 2);
+    // picco vero con interpolazione sinc 16x
+    double tp = 0; const int n = 44100;
+    for (int i = 4000; i + 32 < n; i += 3)
+        for (int ph = 0; ph < 16; ph++) {
+            double acc = 0;
+            for (int j = -31; j <= 32; j++) {
+                const double tt = j - ph / 16.0, sinc = std::fabs(tt) < 1e-12 ? 1 : std::sin(kPi * tt) / (kPi * tt);
+                const double w = 0.42 + 0.5 * std::cos(kPi * tt / 32) + 0.08 * std::cos(2 * kPi * tt / 32);
+                acc += s[static_cast<size_t>(i + j) * 2] * sinc * w;
+            }
+            tp = std::max(tp, std::fabs(acc));
+        }
+    CHECK(tp <= std::pow(10.0, -1 / 20.0) * 1.03, MSG("limiter true-peak: picco vero %.3f (soglia 0,891)", tp));
+    // bassi profondi senza distorsione (tenuta)
+    Engine b; b.configure(44100, 2); b.setParams("master=1;lim=1;lim.thr=-1;headroom=0");
+    auto lo = sine(44100, 2, 40, 2.0, 44100 * 3);
+    runE(b, lo, 2);
+    const double thd = thdPct(lo, 2, 44100, 40, 44100);
+    CHECK(thd < 0.02, MSG("limiter: 40 Hz +6 dB oltre soglia, THD+N %.3f%%", thd));
+}
+
+static void testCompressorAndHdr() {
+    double g = gainDbAt(ON + "comp=1;comp.thr=-18;comp.ratio=4;comp.knee=0", 1000, -6);
+    CHECK(std::fabs(g + 9) < 0.15, MSG("compressore: -6 dB, soglia -18, 4:1 -> %.2f dB (atteso -9)", g));
+    g = gainDbAt(ON + "comp=1;comp.thr=-18;comp.ratio=4", 1000, -30);
+    CHECK(std::fabs(g) < 0.05, MSG("compressore: sotto soglia %.3f dB", g));
+    g = gainDbAt(ON + "comp=1;comp.thr=-30;comp.ratio=4;comp.knee=0;comp.makeup=6", 1000, -40);
+    CHECK(std::fabs(g - 6) < 0.05, MSG("compressore: recupero +6 dB -> %.2f", g));
+    // HDR Restoration: espansione 1,12:1 sotto -38 dBFS (misurata a 1 kHz, dove l'aria non agisce)
+    g = gainDbAt(ON + "hdr=2", 1000, -60);
+    const double exp = (-60.0 + 38.0) * 0.12;
+    CHECK(std::fabs(g - exp) < 0.3, MSG("HDR Restoration: -60 dBFS -> %.2f dB (atteso %.2f)", g, exp));
+    g = gainDbAt(ON + "hdr=2", 1000, -10);
+    CHECK(std::fabs(g) < 0.05, MSG("HDR Restoration: sopra soglia invariato (%.3f dB)", g));
+}
+
+static void testTube() {
+    const int sr = 44100;
+    // segnale piccolo: livello invariato a 1 kHz
+    double g = gainDbAt(ON + "tube=1;tube.amount=0.6", 1000, -50, sr);
+    CHECK(std::fabs(g) < 0.15, MSG("Tube: segnale piccolo invariato a 1 kHz (%.3f dB)", g));
+    // segnale forte: soprattutto 2a armonica
+    Engine e; e.configure(sr, 2); e.setParams((ON + "tube=1;tube.amount=0.6").c_str());
+    auto x = sine(sr, 2, 1000, 0.5, sr * 2);
+    runE(e, x, 2);
+    const double h1 = amplitude(x, 2, 0, sr, 1000, sr), h2 = amplitude(x, 2, 0, sr, 2000, sr), h3 = amplitude(x, 2, 0, sr, 3000, sr);
+    CHECK(h2 > h3 && h2 / h1 > 0.003 && h2 / h1 < 0.1, MSG("Tube: 2a armonica %.1f dB, 3a %.1f dB (calore 'pari')", 20 * std::log10(h2 / h1), 20 * std::log10(h3 / h1)));
+    // aliasing: un seno a 15 kHz non deve generare componenti non armoniche (alias a 14,1 kHz)
+    Engine a; a.configure(sr, 2); a.setParams((ON + "tube=1;tube.amount=1").c_str());
+    auto y = sine(sr, 2, 15000, 0.7, sr * 2);
+    runE(a, y, 2);
+    const double f1 = amplitude(y, 2, 0, sr, 15000, sr), al = amplitude(y, 2, 0, sr, 14100, sr);
+    CHECK(20 * std::log10(al / f1) < -60, MSG("Tube: alias a 14,1 kHz %.1f dB sotto (sovracampionamento x2)", 20 * std::log10(al / f1 + 1e-12)));
+}
+
+static void testExciterAndAir() {
+    const int sr = 48000;
+    double g = gainDbAt(ON + "exciter=1;exciter.amount=1", 200, -10, sr);
+    CHECK(std::fabs(g) < 0.05, MSG("Exciter: 200 Hz invariato (%.3f dB)", g));
+    Engine e; e.configure(sr, 2); e.setParams((ON + "exciter=1;exciter.amount=1").c_str());
+    auto x = sine(sr, 2, 4000, 0.5, sr * 2);
+    runE(e, x, 2);
+    const double h1 = amplitude(x, 2, 0, sr, 4000, sr), h2 = amplitude(x, 2, 0, sr, 8000, sr), h3 = amplitude(x, 2, 0, sr, 12000, sr);
+    CHECK(std::max(h2, h3) / h1 > 0.003, MSG("Exciter: armoniche alte aggiunte a 4 kHz (2a %.1f dB, 3a %.1f dB)", 20 * std::log10(h2 / h1), 20 * std::log10(h3 / h1)));
+    g = gainDbAt(ON + "air=1;air.amount=1", 16000, -20, sr);
+    CHECK(g > 3.5 && g < 5.5, MSG("Hi-Res Air: +%.2f dB a 16 kHz", g));
+    g = gainDbAt(ON + "air=1;air.amount=1", 500, -20, sr);
+    CHECK(std::fabs(g) < 0.1, MSG("Hi-Res Air: 500 Hz invariato (%.3f dB)", g));
+}
+
+static void testBass() {
+    const int sr = 48000;
+    // Analog Bass: rinforzo Pultec a 60 Hz e avvallamento a 240 Hz
+    const double lo = gainDbAt(ON + "abass=1;abass.warmth=1;abass.drive=0;abass.f=60", 30, -40, sr);
+    const double mud = gainDbAt(ON + "abass=1;abass.warmth=1;abass.drive=0;abass.f=60", 240, -40, sr);
+    CHECK(lo > 5 && mud < -1.5, MSG("Analog Bass: +%.1f dB a 30 Hz, %.1f dB a 240 Hz (stile Pultec)", lo, mud));
+    // Drive: aggiunge armoniche ai bassi forti, non ai medi
+    Engine e; e.configure(sr, 2); e.setParams((ON + "abass=1;abass.warmth=0;abass.drive=1").c_str());
+    auto x = sine(sr, 2, 40, 0.5, sr * 2);
+    runE(e, x, 2);
+    const double h1 = amplitude(x, 2, 0, sr, 40, sr), h3 = amplitude(x, 2, 0, sr, 120, sr);
+    CHECK(h3 / h1 > 0.005, MSG("Analog Bass Drive: 3a armonica di 40 Hz a %.1f dB", 20 * std::log10(h3 / h1)));
+    const double mid = gainDbAt(ON + "abass=1;abass.warmth=0;abass.drive=1", 2000, -6, sr);
+    CHECK(std::fabs(mid) < 0.05, MSG("Analog Bass Drive: 2 kHz invariato (%.3f dB)", mid));
+    // DBFB: suono costante invariato, colpo rinforzato
+    const double steady = gainDbAt(ON + "dbfb=2", 60, -12, sr);
+    CHECK(std::fabs(steady) < 0.5, MSG("DBFB: 60 Hz costante quasi invariato (%.2f dB)", steady));
+    auto burst = [&](const char* mode) {
+        Engine b; b.configure(sr, 2); b.setParams((ON + "dbfb=" + mode).c_str());
+        std::vector<float> v(static_cast<size_t>(sr) * 2 * 2);
+        for (int i = 0; i < sr * 2; i++) {
+            const double t = std::fmod(i / double(sr), 0.5);
+            const float s = static_cast<float>(0.3 * std::sin(2 * kPi * 60 * i / sr) * (t < 0.12 ? std::exp(-t / 0.04) : 0.0) + 0.05 * std::sin(2 * kPi * 60 * i / sr));
+            v[2 * i] = v[2 * i + 1] = s;
+        }
+        runE(b, v, 2);
+        double pk = 0; for (int i = sr; i < sr * 2; i++) pk = std::max(pk, (double)std::fabs(v[2 * i]));
+        return pk;
+    };
+    const double pOff = burst("0"), pHigh = burst("2");
+    CHECK(pHigh > pOff * 1.15, MSG("DBFB alto: colpo di cassa +%.1f dB", 20 * std::log10(pHigh / pOff)));
+}
+
+static void testStereo() {
+    const int sr = 48000, n = sr;
+    auto stereoIn = [&]() {
+        std::vector<float> x(static_cast<size_t>(n) * 2);
+        for (int i = 0; i < n; i++) { x[2 * i] = static_cast<float>(0.4 * std::sin(2 * kPi * 1000 * i / sr)); x[2 * i + 1] = static_cast<float>(0.2 * std::sin(2 * kPi * 5000 * i / sr)); }
+        return x;
+    };
+    { Engine e; e.configure(sr, 2); e.setParams((ON + "mono=1").c_str()); auto x = stereoIn(); runE(e, x, 2);
+      double d = 0; for (int i = n / 2; i < n; i++) d = std::max(d, (double)std::fabs(x[2 * i] - x[2 * i + 1]));
+      CHECK(d < 1e-6, "Stereo: mono = canali identici"); }
+    { Engine e; e.configure(sr, 2); e.setParams((ON + "balance=1").c_str()); auto x = stereoIn(), r = x; runE(e, x, 2);
+      double l = 0, dr = 0; for (int i = n / 2; i < n; i++) { l = std::max(l, (double)std::fabs(x[2 * i])); dr = std::max(dr, (double)std::fabs(x[2 * i + 1] - r[2 * i + 1])); }
+      CHECK(l < 1e-4 && dr < 1e-4, "Stereo: bilanciamento tutto a destra"); }
+    // espansione e Surround: il contenuto al centro (voce, mono) resta identico
+    for (const char* p : {"expand=1", "surround=1", "surround=3"}) {
+        Engine e; e.configure(sr, 2); e.setParams((ON + p).c_str());
+        auto x = sine(sr, 2, 1000, 0.3, n); runE(e, x, 2);
+        double d = 0; for (int i = n / 2; i < n; i++) d = std::max(d, (double)std::fabs(x[2 * i] - x[2 * i + 1]));
+        const double g = 20 * std::log10(amplitude(x, 2, 0, sr, 1000, n / 2) / 0.3);
+        CHECK(d < 1e-6 && std::fabs(g) < 0.3, MSG("Stereo %s: voce al centro (L=R) e 1 kHz a %.2f dB", p, g));
+    }
+    // espansione: il laterale acuto raddoppia, quello basso no
+    auto side = [&](const std::string& p, double f) {
+        Engine e; e.configure(sr, 2); e.setParams((ON + p).c_str());
+        std::vector<float> x(static_cast<size_t>(n) * 2);
+        for (int i = 0; i < n; i++) { const float v = static_cast<float>(0.2 * std::sin(2 * kPi * f * i / sr)); x[2 * i] = v; x[2 * i + 1] = -v; }
+        runE(e, x, 2);
+        return 20 * std::log10(amplitude(x, 2, 0, sr, f, n / 2) / 0.2);
+    };
+    const double hi = side("expand=1", 5000), low = side("expand=1", 40);
+    CHECK(std::fabs(hi - 6.02) < 0.15 && low < 1.5, MSG("Stereo: espansione 100%% = +%.2f dB sul laterale a 5 kHz, +%.2f a 40 Hz", hi, low));
+    const double ultra = side("surround=3", 10000);
+    CHECK(ultra > 4.0, MSG("Surround Ultra Wide: laterale a 10 kHz +%.1f dB (immagine piu' ampia)", ultra));
+    // crossfeed: il mono resta piatto, la separazione ai bassi si riduce
+    double worst = 0;
+    for (double f : {100.0, 1000.0, 3000.0, 10000.0}) {
+        Engine e; e.configure(sr, 2); e.setParams((ON + "crossfeed=1").c_str());
+        auto x = sine(sr, 2, f, 0.3, n); runE(e, x, 2);
+        worst = std::max(worst, std::fabs(20 * std::log10(amplitude(x, 2, 0, sr, f, n / 2) / 0.3)));
+    }
+    CHECK(worst < 1.0, MSG("Crossfeed: contenuto mono piatto entro %.2f dB", worst));
+    Engine e; e.configure(sr, 2); e.setParams((ON + "crossfeed=1").c_str());
+    std::vector<float> x(static_cast<size_t>(n) * 2);
+    for (int i = 0; i < n; i++) x[2 * i] = static_cast<float>(0.3 * std::sin(2 * kPi * 200 * i / sr));
+    runE(e, x, 2);
+    const double leak = 20 * std::log10(amplitude(x, 2, 1, sr, 200, n / 2) / amplitude(x, 2, 0, sr, 200, n / 2));
+    CHECK(leak > -8 && leak < -2, MSG("Crossfeed: un suono solo a sinistra arriva a destra a %.1f dB (200 Hz)", leak));
+}
+
+static void testMobileAndLoudness() {
+    const int sr = 48000;
+    const double off = gainDbAt(ON + "mbass=1;mbass.amount=1;speaker=0", 50, -20, sr);
+    CHECK(std::fabs(off) < 0.01, MSG("Mobile Bass: spento in cuffia (%.3f dB)", off));
+    const double hp = gainDbAt(ON + "mbass=1;mbass.amount=1;speaker=1", 40, -20, sr);
+    CHECK(hp < -6, MSG("Mobile Bass sull'altoparlante: 40 Hz attenuati (%.1f dB, protezione)", hp));
+    Engine e; e.configure(sr, 2); e.setParams((ON + "mbass=1;mbass.amount=1;speaker=1").c_str());
+    auto x = sine(sr, 2, 70, 0.4, sr * 2); runE(e, x, 2);
+    const double h1 = amplitude(x, 2, 0, sr, 70, sr), h2 = amplitude(x, 2, 0, sr, 140, sr), h3 = amplitude(x, 2, 0, sr, 210, sr);
+    CHECK(std::max(h2, h3) > h1 * 0.3, MSG("Mobile Bass: basso virtuale, armoniche di 70 Hz a %.1f dB rispetto alla fondamentale", 20 * std::log10(std::max(h2, h3) / h1)));
+    const double l1 = gainDbAt(ON + "loud=1;loud.amount=1;volume=0.25", 40, -20, sr);
+    const double l0 = gainDbAt(ON + "loud=1;loud.amount=1;volume=1", 40, -20, sr);
+    const double mid = gainDbAt(ON + "loud=1;loud.amount=1;volume=0.25", 1000, -20, sr);
+    CHECK(l1 > 3 && std::fabs(l0) < 0.01 && std::fabs(mid) < 0.3, MSG("Loudness: volume -12 dB -> +%.1f dB a 40 Hz, 1 kHz %.2f dB; a volume pieno nulla", l1, mid));
+}
+
+static void testStability() {
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<double> u(0, 1);
+    bool ok = true;
+    for (int it = 0; it < 120 && ok; it++) {
+        char b[2048];
+        std::snprintf(b, sizeof b,
+            "master=1;lim=1;headroom=%d;pre=%g;eq=%d;bass=%g;bass.f=%g;bass.q=%g;treble=%g;treble.f=%g;treble.q=%g;"
+            "abass=1;abass.drive=%g;abass.warmth=%g;tube=1;tube.amount=%g;exciter=1;exciter.amount=%g;air=1;air.amount=%g;"
+            "hdr=%d;surround=%d;balance=%g;expand=%g;crossfeed=%g;dbfb=%d;mbass=1;speaker=1;loud=1;volume=%g;comp=1;comp.ratio=%g;",
+            int(u(rng) * 2), u(rng) * 24 - 12, int(u(rng) * 3), u(rng) * 30 - 15, 20 + u(rng) * 900, 0.1 + u(rng) * 1.9,
+            u(rng) * 30 - 15, 1000 + u(rng) * 19000, 0.1 + u(rng) * 1.9, u(rng), u(rng), u(rng), u(rng), u(rng),
+            int(u(rng) * 3), int(u(rng) * 4), u(rng) * 2 - 1, u(rng), u(rng), int(u(rng) * 3), u(rng), 1 + u(rng) * 19);
+        std::string s = b;
+        for (int i = 0; i < kParamBands; i++) s += peqBand(i, u(rng) > 0.3, int(u(rng) * 8), 20 + u(rng) * 19980, u(rng) * 30 - 15, 0.1 + u(rng) * 17.9);
+        for (int i = 0; i < kGraphicBands; i++) s += "geq." + std::to_string(i) + "=" + std::to_string(u(rng) * 30 - 15) + ";";
+        const int sr = it % 3 == 0 ? 44100 : it % 3 == 1 ? 48000 : 192000;
+        Engine e; e.configure(sr, 2); e.setParams(s.c_str());
+        std::normal_distribution<double> nd(0, 0.4);
+        std::vector<float> x(static_cast<size_t>(sr / 10) * 2);
+        for (auto& v : x) v = static_cast<float>(nd(rng));
+        runE(e, x, 2);
+        for (float v : x) if (!std::isfinite(v) || std::fabs(v) > 1.0f) { ok = false; break; }
+    }
+    CHECK(ok, "stabilita': 120 combinazioni casuali di tutti i moduli, uscita finita ed entro 0 dBFS");
+}
+
+static void testFlushAndLatency() {
+    Engine e; e.configure(48000, 2); e.setParams("master=1;lim=1;tube=1");
+    auto x = sine(48000, 2, 1000, 0.5, 4800); runE(e, x, 2);
+    std::vector<float> out(48000);
+    const int n = e.flush(reinterpret_cast<uint8_t*>(out.data()), kEncFloat, 24000);
+    CHECK(n == e.latencyFrames() && n > 200, MSG("flush: restituisce la latenza (%d frame = limiter + tube)", n));
 }
 
 static void testResample() {
-    // 96 kHz float -> 48 kHz PCM16: 1 kHz resta a livello, 30 kHz (alias) sparisce
     for (int pass = 0; pass < 2; pass++) {
         const double f = pass == 0 ? 1000.0 : 30000.0;
-        Engine e; e.configure(96000, 2); e.setResample(48000);
+        Engine e; e.configure(96000, 2); e.setParams("master=0"); e.setResample(48000);
         const int frames = 96000;
         std::vector<float> in(frames * 2);
         for (int i = 0; i < frames; i++) in[2 * i] = in[2 * i + 1] = 0.5f * (float)std::sin(2 * kPi * f * i / 96000.0);
@@ -166,285 +413,36 @@ static void testResample() {
         int total = 0;
         for (int pos = 0; pos < frames; pos += 4096) {
             const int n = std::min(4096, frames - pos);
-            total += e.process(reinterpret_cast<uint8_t*>(&in[2 * pos]), kEncFloat, n,
-                               reinterpret_cast<uint8_t*>(&out[2 * total]), kEncPcm16, false);
+            total += e.process(reinterpret_cast<uint8_t*>(&in[2 * pos]), kEncFloat, n, reinterpret_cast<uint8_t*>(&out[2 * total]), kEncPcm16);
         }
         total += e.flush(reinterpret_cast<uint8_t*>(&out[2 * total]), kEncPcm16, 8192);
-        out.resize(2 * total);
+        // si escludono inizio e fine: un tono a 30 kHz troncato di colpo produce una coda legittima
+        out.resize(2 * (total - 1000));
         const double r = rmsOf(out, 12000);
         if (pass == 0) {
-            std::printf("totale frames: %d\n", total);
-            CHECK(std::abs(total - 48000) <= 4, "ricampionamento 96->48: numero di campioni corretto (con coda)");
-            CHECK(std::abs(20 * std::log10(r / (0.5 / std::sqrt(2.0)))) < 0.05, "ricampionamento: livello 1 kHz invariato (<0,05 dB)");
+            CHECK(std::abs(total - 48000) <= 4, MSG("ricampionamento 96->48: %d campioni (con coda)", total));
+            CHECK(std::abs(20 * std::log10(r / (0.5 / std::sqrt(2.0)))) < 0.05, "ricampionamento: livello 1 kHz invariato");
         } else {
-            std::printf("alias rms: %.1f dB\n", 20 * std::log10(r + 1e-12));
-            CHECK(20 * std::log10(r + 1e-12) < -80.0, "ricampionamento: alias a 30 kHz sotto -80 dB");
+            CHECK(20 * std::log10(r + 1e-12) < -80.0, MSG("ricampionamento: alias a 30 kHz %.1f dB", 20 * std::log10(r + 1e-12)));
         }
     }
 }
 
-
-// ---- rampa dei coefficienti e del preamp (niente scatti quando si ruotano le manopole)
-
-static std::vector<float> sineBlock(double f, double amp, double fs, int start, int frames) {
-    std::vector<float> v(static_cast<size_t>(frames) * 2);
-    for (int i = 0; i < frames; i++) v[2 * i] = v[2 * i + 1] = static_cast<float>(amp * std::sin(2 * kPi * f * (start + i) / fs));
-    return v;
+static void benchmark() {
+    const int sr = 48000, secs = 20;
+    Engine e; e.configure(sr, 2);
+    std::string s = "master=1;lim=1;comp=1;eq=2;bass=6;treble=4;abass=1;tube=1;exciter=1;air=1;hdr=2;surround=1;crossfeed=0.5;dbfb=1;loud=1;volume=0.5;";
+    for (int i = 0; i < kParamBands; i++) s += peqBand(i, 1, kPeak, 30 * std::pow(1.5, i), 3, 1);
+    e.setParams(s.c_str());
+    std::mt19937 rng(9); std::normal_distribution<double> nd(0, 0.2);
+    std::vector<float> x(static_cast<size_t>(sr) * secs * 2);
+    for (auto& v : x) v = static_cast<float>(nd(rng));
+    const auto t0 = std::chrono::steady_clock::now();
+    runE(e, x, 2);
+    const double el = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("info: tutti i moduli accesi, %d s di audio stereo 48 kHz in %.2f s (%.0fx tempo reale)\n", secs, el, secs / el);
+    CHECK(secs / el > 20, MSG("prestazioni: %.0fx il tempo reale su questo computer", secs / el));
 }
-
-static void runFloat(Engine& e, std::vector<float>& in, std::vector<float>& out, int frames) {
-    out.assign(in.size(), 0.0f);
-    e.process(reinterpret_cast<uint8_t*>(in.data()), kEncFloat, frames, reinterpret_cast<uint8_t*>(out.data()), kEncFloat, false);
-}
-
-static void testCoefRamp() {
-    const double fs = 48000.0, f = 1000.0, amp = 0.3;
-    double idc[5] = {1, 0, 0, 0, 0}, pk[5];
-    peaking(fs, f, 1.0, 10.0, pk);
-    Engine a; a.configure(48000, 2); a.setFilters(idc, 1, 1.0);
-    Engine b; b.configure(48000, 2); b.setFilters(pk, 1, 1.0);
-    std::vector<float> in, out, outB;
-    in = sineBlock(f, amp, fs, 0, 4096); runFloat(a, in, out, 4096);
-    a.setFilters(pk, 1, 1.0);  // cambio improvviso: +10 dB a 1 kHz
-    float prev = out[2 * 4095];
-    double maxStep = 0.0;
-    for (int blk = 1; blk < 12; blk++) {
-        in = sineBlock(f, amp, fs, blk * 4096, 4096); runFloat(a, in, out, 4096);
-        for (int i = 0; i < 4096; i++) { maxStep = std::max(maxStep, static_cast<double>(std::fabs(out[2 * i] - prev))); prev = out[2 * i]; }
-    }
-    // ampiezza finale = 0.3 * 3.16 = 0.95: passo massimo naturale = 2*pi*f*A/fs = 0.12
-    CHECK(maxStep < 0.16, "rampa coefficienti: nessuno scatto al cambio improvviso del filtro");
-    // a regime l'uscita coincide con un motore che ha avuto il filtro fin dall'inizio
-    for (int blk = 0; blk < 12; blk++) { in = sineBlock(f, amp, fs, blk * 4096, 4096); runFloat(b, in, outB, 4096); }
-    double err = 0.0;
-    for (int i = 0; i < 2048; i++) err = std::max(err, static_cast<double>(std::fabs(out[2 * (4095 - i)] - outB[2 * (4095 - i)])));
-    CHECK(err < 1e-4, "rampa coefficienti: a regime il risultato e' quello del filtro nuovo");
-}
-
-static void testPreampRamp() {
-    const double fs = 48000.0, f = 100.0, amp = 0.5;
-    double idc[5] = {1, 0, 0, 0, 0};
-    Engine e; e.configure(48000, 2); e.setFilters(idc, 1, 1.0);
-    std::vector<float> in = sineBlock(f, amp, fs, 0, 2048), out;
-    runFloat(e, in, out, 2048);
-    e.setFilters(idc, 1, 0.1);  // preamp da 0 a -20 dB di colpo
-    float prev = out[2 * 2047];
-    double maxStep = 0.0;
-    for (int blk = 1; blk < 6; blk++) {
-        in = sineBlock(f, amp, fs, blk * 2048, 2048); runFloat(e, in, out, 2048);
-        for (int i = 0; i < 2048; i++) { maxStep = std::max(maxStep, static_cast<double>(std::fabs(out[2 * i] - prev))); prev = out[2 * i]; }
-    }
-    CHECK(maxStep < 0.02, "rampa preamp: nessuno scatto al cambio improvviso del livello");
-    float pk = 0;
-    for (int i = 0; i < 2048; i++) pk = std::max(pk, std::fabs(out[2 * i]));
-    CHECK(std::fabs(pk - 0.05f) < 0.002f, "rampa preamp: livello finale esatto (-20 dB)");
-}
-
-static void testRampToIdentity() {
-    const double fs = 48000.0;
-    double idc[5] = {1, 0, 0, 0, 0}, pk[5];
-    peaking(fs, 200.0, 0.6, 3.0, pk);
-    Engine e; e.configure(48000, 2); e.setFilters(pk, 1, 1.0);
-    std::vector<float> in = sineBlock(200.0, 0.3, fs, 0, 4096), out;
-    runFloat(e, in, out, 4096);
-    e.setFilters(idc, 1, 1.0);  // stadio che torna neutro
-    for (int blk = 1; blk < 6; blk++) { in = sineBlock(200.0, 0.3, fs, blk * 4096, 4096); runFloat(e, in, out, 4096); }
-    double err = 0.0;
-    for (int i = 0; i < 4096; i++) err = std::max(err, static_cast<double>(std::fabs(out[2 * i] - in[2 * i])));
-    CHECK(err < 1e-6, "rampa verso lo stadio neutro: uscita identica all'ingresso");
-    e.setFilters(pk, 1, 1.0);  // e di nuovo attivo: nessuno stato "vecchio" che risorge
-    double maxStep = 0.0; float prev = out[2 * 4095];
-    for (int blk = 6; blk < 12; blk++) {
-        in = sineBlock(200.0, 0.3, fs, blk * 4096, 4096); runFloat(e, in, out, 4096);
-        for (int i = 0; i < 4096; i++) { maxStep = std::max(maxStep, static_cast<double>(std::fabs(out[2 * i] - prev))); prev = out[2 * i]; }
-    }
-    CHECK(maxStep < 0.02, "riattivazione dello stadio: nessuno scatto");
-}
-
-// True peak di riferimento, indipendente dal limiter: interpolazione sinc (Blackman, 64 punti)
-// a 16 fasi per campione.
-static double refTruePeak(const std::vector<float>& x, int skip) {
-    double pk = 0.0;
-    const int H = 32;
-    for (int n = skip + H; n + H < static_cast<int>(x.size()); n++) {
-        for (int ph = 0; ph < 16; ph++) {
-            const double fr = ph / 16.0;
-            double acc = 0.0;
-            for (int j = -H + 1; j <= H; j++) {
-                const double t = j - fr;
-                const double sinc = std::fabs(t) < 1e-12 ? 1.0 : std::sin(kPi * t) / (kPi * t);
-                const double w = 0.42 + 0.5 * std::cos(kPi * t / H) + 0.08 * std::cos(2 * kPi * t / H);
-                acc += x[n + j] * sinc * w;
-            }
-            pk = std::max(pk, std::fabs(acc));
-        }
-    }
-    return pk;
-}
-
-static void testTruePeak() {
-    const double fs = 44100.0;
-    const float thr = std::pow(10.0f, -1.0f / 20.0f);
-    struct Case { double f, ph, amp; const char* name; };
-    const Case cases[] = {
-        {fs / 4, kPi / 4, 1.273, "fs/4 con fase 45 gradi (campioni a 0,9, picco vero 1,27)"},
-        {0.36 * fs, 0.7, 1.4, "sinusoide a 0,36 fs, ampiezza 1,4"},
-        {0.2 * fs, 1.1, 1.8, "sinusoide a 0,2 fs, ampiezza 1,8"},
-    };
-    for (const Case& cs : cases) {
-        Engine e; e.configure(44100, 2);
-        e.setLimiter(true, -1.0f, 80.0f, 5.0f);
-        const int frames = 20000;
-        std::vector<float> in(static_cast<size_t>(frames) * 2), out(in.size());
-        for (int i = 0; i < frames; i++) {
-            const float v = static_cast<float>(cs.amp * std::sin(2 * kPi * cs.f * i / fs + cs.ph));
-            in[2 * i] = v; in[2 * i + 1] = v;
-        }
-        runFloat(e, in, out, frames);
-        std::vector<float> mono(frames);
-        for (int i = 0; i < frames; i++) mono[i] = out[2 * i];
-        double sp = 0; for (int i = 2000; i < frames; i++) sp = std::max(sp, (double)std::fabs(mono[i]));
-        const double tp = refTruePeak(mono, 2000);
-        char msg[200];
-        std::snprintf(msg, sizeof msg, "true-peak: %s -> picco campioni %.3f, picco vero %.3f (soglia %.3f)", cs.name, sp, tp, thr);
-        CHECK(tp <= thr * 1.03, msg);
-    }
-}
-
-static void testBassHold() {
-    // 40 Hz oltre soglia: senza tenuta il gain risale dentro il semiperiodo e distorce
-    Engine e; e.configure(44100, 2); e.setLimiter(true, -1.0f, 80.0f, 5.0f);
-    const int N = 44100 * 3;
-    std::vector<float> in(static_cast<size_t>(N) * 2), out;
-    for (int i = 0; i < N; i++) { const float v = static_cast<float>(2.0 * std::sin(2 * kPi * 40.0 * i / 44100.0)); in[2 * i] = v; in[2 * i + 1] = v; }
-    runFloat(e, in, out, N);
-    const int a = 44100;
-    double sc = 0, cc = 0;
-    for (int i = a; i < N; i++) { const double t = 2 * kPi * 40.0 * i / 44100.0; sc += out[2 * i] * std::sin(t); cc += out[2 * i] * std::cos(t); }
-    sc *= 2.0 / (N - a); cc *= 2.0 / (N - a);
-    double res = 0, sig = 0;
-    for (int i = a; i < N; i++) { const double t = 2 * kPi * 40.0 * i / 44100.0; const double fit = sc * std::sin(t) + cc * std::cos(t); res += (out[2 * i] - fit) * (out[2 * i] - fit); sig += fit * fit; }
-    const double thd = 100 * std::sqrt(res / sig);
-    char msg[160];
-    std::snprintf(msg, sizeof msg, "limiter: 40 Hz +6 dB oltre soglia senza distorsione (THD+N %.3f%%, prima 0,245%%)", thd);
-    CHECK(thd < 0.02, msg);
-}
-
-static void testStereo() {
-    const int N = 44100;
-    std::vector<float> in(static_cast<size_t>(N) * 2), out;
-    for (int i = 0; i < N; i++) {
-        in[2 * i] = static_cast<float>(0.5 * std::sin(2 * kPi * 1000.0 * i / 44100.0));
-        in[2 * i + 1] = static_cast<float>(0.2 * std::sin(2 * kPi * 3000.0 * i / 44100.0));
-    }
-    {   // mono: canali identici
-        Engine e; e.configure(44100, 2); e.setStereo(0.0f, 0.0f);
-        runFloat(e, in, out, N);
-        double d = 0; for (int i = 22050; i < N; i++) d = std::max(d, (double)std::fabs(out[2 * i] - out[2 * i + 1]));
-        CHECK(d < 1e-6, "stereo: mono = canali identici");
-    }
-    {   // neutro: uscita identica
-        Engine e; e.configure(44100, 2); e.setStereo(0.0f, 1.0f);
-        runFloat(e, in, out, N);
-        CHECK(in == out, "stereo: neutro = uscita identica all'ingresso");
-    }
-    {   // bilanciamento tutto a destra: sinistro muto, destro invariato
-        Engine e; e.configure(44100, 2); e.setStereo(1.0f, 1.0f);
-        runFloat(e, in, out, N);
-        double l = 0, r = 0; for (int i = 22050; i < N; i++) { l = std::max(l, (double)std::fabs(out[2 * i])); r = std::max(r, (double)std::fabs(out[2 * i + 1] - in[2 * i + 1])); }
-        CHECK(l < 1e-4 && r < 1e-4, "stereo: bilanciamento a destra (sinistro muto, destro invariato)");
-    }
-    {   // espansione x2: laterale acuto raddoppiato, laterale basso (40 Hz) quasi invariato
-        auto sideGain = [](double f) {
-            Engine e; e.configure(44100, 2); e.setStereo(0.0f, 2.0f);
-            const int M = 44100 * 2;
-            std::vector<float> x(static_cast<size_t>(M) * 2), y;
-            for (int i = 0; i < M; i++) { const float v = static_cast<float>(0.2 * std::sin(2 * kPi * f * i / 44100.0)); x[2 * i] = v; x[2 * i + 1] = -v; }
-            runFloat(e, x, y, M);
-            double a = 0, b = 0; for (int i = M / 2; i < M; i++) { a += y[2 * i] * y[2 * i]; b += x[2 * i] * x[2 * i]; }
-            return 20 * std::log10(std::sqrt(a / b));
-        };
-        const double hi = sideGain(5000.0), lo = sideGain(40.0);
-        char msg[160];
-        std::snprintf(msg, sizeof msg, "stereo: espansione x2 = +%.2f dB sul laterale a 5 kHz, +%.2f dB a 40 Hz (bassi al centro)", hi, lo);
-        CHECK(std::fabs(hi - 6.02) < 0.1 && lo < 1.5, msg);
-    }
-}
-
-// Misura il guadagno a regime del compressore su un tono di prova.
-static double compGain(double f, double levelDb, float thr, float ratio, float knee, float makeup, double* thd = nullptr) {
-    Engine e; e.configure(44100, 2); e.setCompressor(true, thr, ratio, 10.0f, 150.0f, knee, makeup);
-    const int N = 44100 * 3;
-    const double amp = std::pow(10.0, levelDb / 20.0);
-    std::vector<float> in(static_cast<size_t>(N) * 2), out;
-    for (int i = 0; i < N; i++) { const float v = static_cast<float>(amp * std::sin(2 * kPi * f * i / 44100.0)); in[2 * i] = v; in[2 * i + 1] = v; }
-    runFloat(e, in, out, N);
-    double sc = 0, cc = 0; const int a = 44100 * 2;
-    for (int i = a; i < N; i++) { const double t = 2 * kPi * f * i / 44100.0; sc += out[2 * i] * std::sin(t); cc += out[2 * i] * std::cos(t); }
-    sc *= 2.0 / (N - a); cc *= 2.0 / (N - a);
-    if (thd) {
-        double res = 0, sig = 0;
-        for (int i = a; i < N; i++) { const double t = 2 * kPi * f * i / 44100.0; const double fit = sc * std::sin(t) + cc * std::cos(t); res += (out[2 * i] - fit) * (out[2 * i] - fit); sig += fit * fit; }
-        *thd = 100 * std::sqrt(res / sig);
-    }
-    return 20 * std::log10(std::sqrt(sc * sc + cc * cc) / amp);
-}
-
-static void testCompressor() {
-    char msg[200];
-    // sopra soglia: -6 dBFS con soglia -18 e rapporto 4:1 -> uscita -18 + 12/4 = -15 -> riduzione 9 dB
-    double g = compGain(1000, -6, -18.0f, 4.0f, 0.0f, 0.0f);
-    std::snprintf(msg, sizeof msg, "compressore: -6 dB, soglia -18, 4:1 -> riduzione %.2f dB (attesa 9,00)", -g);
-    CHECK(std::fabs(g + 9.0) < 0.15, msg);
-    // sotto soglia: nessuna modifica
-    g = compGain(1000, -30, -18.0f, 4.0f, 0.0f, 0.0f);
-    std::snprintf(msg, sizeof msg, "compressore: sotto soglia -> %.3f dB (attesi 0)", g);
-    CHECK(std::fabs(g) < 0.05, msg);
-    // rapporto 1:1 trasparente anche sopra soglia
-    g = compGain(1000, -6, -18.0f, 1.0f, 6.0f, 0.0f);
-    std::snprintf(msg, sizeof msg, "compressore: rapporto 1:1 -> %.3f dB (attesi 0)", g);
-    CHECK(std::fabs(g) < 0.05, msg);
-    // ginocchio morbido: alla soglia la riduzione e' circa la meta' del tratto a ginocchio
-    g = compGain(1000, -18, -18.0f, 4.0f, 12.0f, 0.0f);
-    const double expKnee = (1.0 / 4.0 - 1.0) * 36.0 / 24.0;  // (1/R-1)(W/2)^2/(2W) con over=0, W=12
-    std::snprintf(msg, sizeof msg, "compressore: ginocchio morbido a soglia -> %.2f dB (atteso %.2f)", g, expKnee);
-    CHECK(std::fabs(g - expKnee) < 0.2, msg);
-    // guadagno di recupero
-    g = compGain(1000, -30, -18.0f, 4.0f, 0.0f, 6.0f);
-    CHECK(std::fabs(g - 6.0) < 0.05, "compressore: recupero +6 dB");
-    // distorsione sui bassi: tono di 60 Hz molto compresso
-    double thd = 0;
-    compGain(60, -6, -18.0f, 4.0f, 6.0f, 0.0f, &thd);
-    std::snprintf(msg, sizeof msg, "compressore: 60 Hz compresso 9 dB, THD+N %.3f%%", thd);
-    CHECK(thd < 1.0, msg);
-    // tempi: dopo un salto da -40 a -6 dB, la riduzione raggiunge il 63% in circa l'attacco (10 ms)
-    {
-        Engine e; e.configure(44100, 1); e.setCompressor(true, -18.0f, 4.0f, 10.0f, 150.0f, 0.0f, 0.0f);
-        const int N = 44100;
-        std::vector<float> in(N), out;
-        for (int i = 0; i < N; i++) { const double a = i < 4410 ? 0.01 : 0.5; in[i] = static_cast<float>(a * std::sin(2 * kPi * 1000.0 * i / 44100.0)); }
-        runFloat(e, in, out, N);
-        auto env = [&](int c) { double m = 0; for (int i = c; i < c + 44; i++) m = std::max(m, (double)std::fabs(out[i])); return m; };
-        const double inEnv = 0.5;
-        auto redDb = [&](int c) { return 20 * std::log10(env(c) / inEnv); };
-        const double fin = redDb(30000);
-        // il rilevatore (8 ms) si somma all'attacco: il 63% arriva entro 25 ms e non prima di 5 ms
-        int t63 = -1; for (int i = 4410; i < 20000; i += 8) if (redDb(i) <= 0.63 * fin) { t63 = i - 4410; break; }
-        std::snprintf(msg, sizeof msg, "compressore: attacco 10 ms -> 63%% della riduzione dopo %.1f ms", t63 / 44.1);
-        CHECK(t63 > 5 * 44 && t63 < 25 * 44, msg);
-    }
-    // collegato: un solo guadagno per i due canali (immagine stabile)
-    {
-        Engine e; e.configure(44100, 2); e.setCompressor(true, -18.0f, 6.0f, 5.0f, 100.0f, 0.0f, 0.0f);
-        const int N = 44100;
-        std::vector<float> in(static_cast<size_t>(N) * 2), out;
-        for (int i = 0; i < N; i++) { in[2 * i] = static_cast<float>(0.9 * std::sin(2 * kPi * 500.0 * i / 44100.0)); in[2 * i + 1] = 0.3f * in[2 * i]; }
-        runFloat(e, in, out, N);
-        double worst = 0; for (int i = 20000; i < N; i++) if (std::fabs(in[2 * i]) > 0.1f) worst = std::max(worst, (double)std::fabs(out[2 * i + 1] / out[2 * i] - 0.3));
-        CHECK(worst < 1e-4, "compressore: stesso guadagno sui due canali (rapporto L/R invariato)");
-    }
-}
-
 static double measureLufs(int sr, int ch, double f, double peakDb, double seconds, double ampSecondHalf = 1.0) {
     mleq::LoudnessMeter m(sr, ch);
     const int N = static_cast<int>(sr * seconds);
@@ -459,7 +457,6 @@ static double measureLufs(int sr, int ch, double f, double peakDb, double second
     while (pos < N) { const int n = std::min(step, N - pos); m.feed(&x[static_cast<size_t>(pos) * ch], n); pos += n; step = step % 4001 + 311; }
     return m.integrated();
 }
-
 static void testLoudness() {
     char msg[200];
     // EBU Tech 3341, prova 1: seno stereo a 1 kHz a -23 dBFS di picco = -23,0 LUFS
@@ -488,22 +485,26 @@ static void testLoudness() {
 }
 
 int main() {
-    testResample();
-    testBypassBitExact();
-    testPcm24ToFloat();
-    testFilterGain();
+    testBypass();
+    testPcm24();
+    testFilters();
+    testGraphic();
+    testTone();
+    testRamp();
+    testHeadroom();
     testLimiter();
-    testTruePeak();
-    testBassHold();
+    testCompressorAndHdr();
+    testTube();
+    testExciterAndAir();
+    testBass();
     testStereo();
-    testCompressor();
-    testLoudness();
-    testFlushAndLongRun();
+    testMobileAndLoudness();
     testStability();
-    testChannels();
-    testCoefRamp();
-    testPreampRamp();
-    testRampToIdentity();
-    std::printf(failures ? "\n%d TEST FALLITI\n" : "\nTUTTI I TEST NATIVI SUPERATI\n", failures);
-    return failures ? 1 : 0;
+    testFlushAndLatency();
+    testResample();
+    testLoudness();
+    benchmark();
+    if (failures) { std::printf("\n%d TEST FALLITI\n", failures); return 1; }
+    std::printf("\nTUTTI I TEST NATIVI SUPERATI\n");
+    return 0;
 }

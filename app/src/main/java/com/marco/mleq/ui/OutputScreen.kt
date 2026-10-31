@@ -94,7 +94,7 @@ fun OutputScreen(env: AppEnv) {
     }
     val limiterDb by produceState(0f) {
         while (true) {
-            value = env.engine.eqProcessor.limiterReductionDb(true)
+            value = env.engine.eqProcessor.meters(true).limiterDb
             delay(600)
         }
     }
@@ -152,7 +152,7 @@ fun OutputScreen(env: AppEnv) {
                             "3. DSP",
                             when {
                                 info.bypass -> "bypass (nessuna elaborazione)"
-                                else -> "attivo · ${info.stages} filtri" + if (info.limiter) " · limiter" else ""
+                                else -> "attivo · ${info.stages} filtri" + if (info.modules.isNotEmpty()) " · " + info.modules.joinToString(", ") else ""
                             }
                         )
                         KV("4. Uscita del DSP", "${info.outEncoding} · ${rate(info.sampleRate)}")
@@ -169,9 +169,10 @@ fun OutputScreen(env: AppEnv) {
             }
 
             Section("Elaborazione DSP") {
-                KV("Preamp effettivo", String.format(Locale.ITALY, "%+.1f dB", info.preampDb))
+                KV("Guadagno d'ingresso", String.format(Locale.ITALY, "%+.1f dB (preamp + ReplayGain - headroom)", info.inputGainDb))
+                KV("Headroom automatico", if (info.headroomDb > 0.05f) String.format(Locale.ITALY, "-%.1f dB", info.headroomDb) else "nessuno")
                 KV("ReplayGain", info.replayGainDb?.let { String.format(Locale.ITALY, "%+.1f dB", it) } ?: "non applicato")
-                KV("Latenza del limiter", if (info.limiter) String.format(Locale.ITALY, "%.1f ms", info.latencyMs) else "limiter spento")
+                KV("Latenza del DSP", if (info.latencyMs > 0f) String.format(Locale.ITALY, "%.1f ms", info.latencyMs) else "nessuna")
                 if (info.limiter) {
                     KV(
                         "Riduzione limiter (ultimo 0,6 s)",

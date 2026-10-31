@@ -7,7 +7,7 @@ import androidx.compose.runtime.setValue
 import com.marco.mleq.MLEqApp
 
 /** Schermate a tutto schermo sopra l'equalizzatore. */
-enum class Overlay { None, Analyzer, Output, Log }
+enum class Overlay { None, Analyzer, Output, Log, Graphic, Parametric }
 
 /** Azioni che richiedono l'Activity (selettore file, condivisione del log). */
 interface Actions {
@@ -24,6 +24,12 @@ class AppEnv(val app: MLEqApp) {
     var actions: Actions? = null
 
     var overlay by mutableStateOf(Overlay.None)
+
+    /** Motore "ombra" che calcola la curva mostrata nei grafici. */
+    val preview by lazy { com.marco.mleq.audio.DspPreview() }
+
+    /** Banda selezionata nell'editor parametrico. */
+    var peqSelected by mutableIntStateOf(0)
 
     /** Banda dell'analizzatore selezionata (0..30, 17 = 1 kHz) e richiesta di azzeramento picchi. */
     var analyzerBand by mutableIntStateOf(17)

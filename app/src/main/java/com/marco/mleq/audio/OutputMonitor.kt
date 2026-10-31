@@ -82,6 +82,9 @@ class OutputMonitor(context: Context) {
         return Plan(target, if (wide) 32 else 16)
     }
 
+    /** Chiamato quando cambia il tipo di uscita (per Mobile Bass). */
+    var onKindChanged: ((OutKind) -> Unit)? = null
+
     init {
         refresh()
         am.registerAudioDeviceCallback(object : AudioDeviceCallback() {
@@ -121,7 +124,10 @@ class OutputMonitor(context: Context) {
                 )
             }
         }
-        kind = dev?.let { kindOf(it.type) } ?: OutKind.Speaker
+        val newKind = dev?.let { kindOf(it.type) } ?: OutKind.Speaker
+        val changed = newKind != kind
+        kind = newKind
+        if (changed) onKindChanged?.invoke(newKind)
         name = dev?.productName?.toString().orEmpty()
         exact = ex
     }

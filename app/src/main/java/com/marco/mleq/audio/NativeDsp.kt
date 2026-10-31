@@ -4,8 +4,8 @@ import com.marco.mleq.util.AppLog
 import java.nio.ByteBuffer
 
 /**
- * Ponte JNI verso il motore DSP nativo (cascata biquad + limiter look-ahead).
- * Tutte le chiamate avvengono sul thread di riproduzione.
+ * Ponte JNI verso il motore DSP nativo (app/src/main/cpp/dsp_engine.h).
+ * Le chiamate di elaborazione avvengono sul thread di riproduzione.
  */
 class NativeDsp {
     private var handle: Long = if (available) nCreate() else 0L
@@ -16,24 +16,9 @@ class NativeDsp {
         if (handle != 0L) nConfigure(handle, sampleRate, channels)
     }
 
-    fun setFilters(coefs: DoubleArray, stages: Int, preGain: Double) {
-        if (handle != 0L) nSetFilters(handle, coefs, stages, preGain)
-    }
-
-    fun setLimiter(on: Boolean, thresholdDb: Float, releaseMs: Float, lookaheadMs: Float) {
-        if (handle != 0L) nSetLimiter(handle, on, thresholdDb, releaseMs, lookaheadMs)
-    }
-
-    fun setCompressor(on: Boolean, thr: Float, ratio: Float, atk: Float, rel: Float, knee: Float, makeup: Float) {
-        if (handle != 0L) nSetCompressor(handle, on, thr, ratio, atk, rel, knee, makeup)
-    }
-
-    /** Massima riduzione del compressore dall'ultima lettura (dB, <= 0). */
-    fun compressorReductionDb(reset: Boolean): Float = if (handle != 0L) nCompressorGainDb(handle, reset) else 0f
-
-    /** [balance] -1..1, [width] 0..2 (0 = mono). */
-    fun setStereo(balance: Float, width: Float) {
-        if (handle != 0L) nSetStereo(handle, balance, width)
+    /** Parametri come testo "chiave=valore" ([DspSettings.toNative]). */
+    fun setParams(text: String) {
+        if (handle != 0L) nSetParams(handle, text)
     }
 
     fun reset() {
@@ -42,8 +27,26 @@ class NativeDsp {
 
     fun latencyFrames(): Int = if (handle != 0L) nLatency(handle) else 0
 
-    /** Massima riduzione di guadagno del limiter dall'ultima lettura (dB, <= 0). */
-    fun limiterReductionDb(reset: Boolean): Float = if (handle != 0L) nLimiterGainDb(handle, reset) else 0f
+    /** Misure: riduzione limiter, riduzione compressore, headroom, guadagno d'ingresso (dB), stadi attivi. */
+    fun meters(reset: Boolean): DoubleArray {
+        val out = DoubleArray(5)
+        if (handle != 0L) nMeters(handle, out, reset)
+        return out
+    }
+
+    /** Risposta in dB della pila di filtri alle frequenze date. */
+    fun response(freqs: DoubleArray): DoubleArray {
+        val out = DoubleArray(freqs.size)
+        if (handle != 0L) nResponse(handle, freqs, out)
+        return out
+    }
+
+    /** Guadagni realmente applicati alle 15 bande del grafico (curva fedele). */
+    fun graphicApplied(): DoubleArray {
+        val out = DoubleArray(DspSettings.GRAPHIC_BANDS)
+        if (handle != 0L) nGraphicApplied(handle, out)
+        return out
+    }
 
     /** [inBuf] e [outBuf] devono essere buffer diretti. */
     fun process(
@@ -72,17 +75,15 @@ class NativeDsp {
     private external fun nCreate(): Long
     private external fun nDestroy(h: Long)
     private external fun nConfigure(h: Long, sr: Int, ch: Int)
-    private external fun nSetFilters(h: Long, coefs: DoubleArray, stages: Int, preGain: Double)
-    private external fun nSetLimiter(h: Long, on: Boolean, thr: Float, rel: Float, look: Float)
-    private external fun nSetCompressor(h: Long, on: Boolean, thr: Float, ratio: Float, atk: Float, rel: Float, knee: Float, makeup: Float)
-    private external fun nCompressorGainDb(h: Long, reset: Boolean): Float
-    private external fun nSetStereo(h: Long, bal: Float, width: Float)
+    private external fun nSetParams(h: Long, text: String)
     private external fun nReset(h: Long)
     private external fun nSetResample(h: Long, outRate: Int)
     private external fun nMaxOut(h: Long, inFrames: Int): Int
     private external fun nFlushIn(h: Long): Int
     private external fun nLatency(h: Long): Int
-    private external fun nLimiterGainDb(h: Long, reset: Boolean): Float
+    private external fun nMeters(h: Long, out: DoubleArray, reset: Boolean)
+    private external fun nResponse(h: Long, freqs: DoubleArray, out: DoubleArray)
+    private external fun nGraphicApplied(h: Long, out: DoubleArray)
     private external fun nProcess(
         h: Long, inBuf: ByteBuffer, inOff: Int, inEnc: Int, frames: Int,
         outBuf: ByteBuffer, outEnc: Int, bypass: Boolean,

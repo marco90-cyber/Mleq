@@ -6,7 +6,6 @@ import androidx.media3.common.audio.BaseAudioProcessor
 import com.marco.mleq.util.AppLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.pow
 
 /** Stato reale del DSP, per la schermata "Uscita audio" (solo valori effettivamente in uso). */
 data class DspInfo(
@@ -19,43 +18,57 @@ data class DspInfo(
     val limiter: Boolean = false,
     val latencyMs: Float = 0f,
     val stages: Int = 0,
-    val preampDb: Float = 0f,
+    /** Guadagno all'ingresso del DSP: preamp + ReplayGain - headroom (dB). */
+    val inputGainDb: Float = 0f,
+    val headroomDb: Float = 0f,
     /** Guadagno ReplayGain applicato (dB); null = tag assenti o funzione spenta. */
     val replayGainDb: Float? = null,
     /** "tag" = letto dal file, "analisi" = misurato dall'app. */
     val replayGainSource: String = "",
+    /** Moduli accesi, per la riga di stato. */
+    val modules: List<String> = emptyList(),
 )
 
+/** Riduzioni massime di limiter e compressore dall'ultima lettura (dB, <= 0). */
+class Meters(val limiterDb: Float, val compressorDb: Float)
+
 /**
- * Elaborazione DSP in tempo reale tramite il motore nativo:
- * preamp + bassi + N bande parametriche + alti (biquad in doppia precisione) e limiter look-ahead.
- * I coefficienti sono calcolati in Kotlin ([EqMath]) e passati al motore nativo.
- *
- * Ingressi: PCM 16/24/32 bit e float. Uscita scelta dall'utente: 16 bit (con dither), 24 bit o 32 bit (float).
- * Con DSP spento si ha un bypass reale (PCM16 bit-exact).
+ * Processore audio di Media3 che passa il PCM al motore nativo ([NativeDsp]).
+ * Ingressi: PCM 16/24/32 bit e float. Uscita: 16 bit (con dither), float con 24 bit utili o float 32 bit.
+ * Con il DSP spento l'audio passa intatto (PCM16 bit-exact).
  */
 class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
 
     private val dsp = NativeDsp()
 
-    @Volatile
-    private var pending: EqConfig = EqConfig()
+    @Volatile private var pending: DspSettings = DspSettings()
+    @Volatile private var configVersion = 0
 
-    @Volatile
-    private var configVersion = 0
-
-    /** Profondità di uscita decisa dall'uscita adattiva: 16 (con dither) oppure 32 (float). */
-    @Volatile
-    var outputBits: Int = 32
+    /** Profondità di uscita decisa dall'uscita adattiva: 16, 24 (float) oppure 32 (float). */
+    @Volatile var outputBits: Int = 32
 
     /** Frequenza di uscita se diversa da quella d'ingresso (ricampionamento), 0 = nessuno. */
-    @Volatile
-    var targetRate: Int = 0
+    @Volatile var targetRate: Int = 0
     private var outRate = 0
 
-    @Volatile
-    var info: DspInfo = DspInfo()
+    @Volatile var info: DspInfo = DspInfo()
         private set
+
+    /** Uscita sull'altoparlante del telefono (per Mobile Bass). */
+    @Volatile var speaker: Boolean = false
+        set(value) { if (field != value) { field = value; configVersion++ } }
+
+    /** Volume di ascolto lineare 0..1 (per la loudness legata al volume). */
+    @Volatile var listenVolume: Double = 1.0
+        set(value) { if (kotlin.math.abs(field - value) > 1e-4) { field = value; configVersion++ } }
+
+    /** Tag ReplayGain del brano in arrivo (impostati dal sink a ogni cambio di formato). */
+    @Volatile var replayGain: ReplayGain.Info? = null
+        set(value) { field = value; configVersion++ }
+
+    /** Loudness misurata dall'app per il brano attuale, usata se il file non ha tag. */
+    @Volatile var scannedGain: ReplayGain.Info? = null
+        set(value) { field = value; configVersion++ }
 
     private var appliedVersion = -1
     private var sampleRate = 0
@@ -64,38 +77,18 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
     private var inEnc = NativeDsp.ENC_16
     private var outEnc = NativeDsp.ENC_16
     private var bypass = true
-    private var limiterOn = false
-    private var stageCount = 0
-    private var preDb = 0f
     private var scratchIn: ByteBuffer? = null
     private var firstBuffer = true
 
-    /** Tag ReplayGain del brano in arrivo (impostati dal sink a ogni cambio di formato). */
-    @Volatile
-    var replayGain: ReplayGain.Info? = null
-        set(value) {
-            field = value
-            configVersion++
-        }
-
-    /** Loudness misurata dall'app per il brano attuale, usata se il file non ha tag. */
-    @Volatile
-    var scannedGain: ReplayGain.Info? = null
-        set(value) {
-            field = value
-            configVersion++
-        }
-
-    fun setConfig(config: EqConfig) {
-        pending = config
+    fun setSettings(s: DspSettings) {
+        pending = s
         configVersion++
     }
 
-    /** Massima riduzione del limiter dall'ultima lettura (dB). */
-    fun limiterReductionDb(reset: Boolean = true): Float = dsp.limiterReductionDb(reset)
-
-    /** Massima riduzione del compressore dall'ultima lettura (dB). */
-    fun compressorReductionDb(reset: Boolean = true): Float = dsp.compressorReductionDb(reset)
+    fun meters(reset: Boolean = true): Meters {
+        val m = dsp.meters(reset)
+        return Meters(m[0].toFloat(), m[1].toFloat())
+    }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (!dsp.isReady) return AudioProcessor.AudioFormat.NOT_SET
@@ -120,10 +113,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
         outRate = if (targetRate > 0 && targetRate != sampleRate) targetRate else sampleRate
         dsp.setResample(if (outRate != sampleRate) outRate else 0)
         analyzer.sampleRate = outRate
-        info = DspInfo(
-            sampleRate = sampleRate, channels = channels,
-            inEncoding = encName(inEnc), outEncoding = encName(outEnc),
-        )
+        info = DspInfo(sampleRate = sampleRate, channels = channels, inEncoding = encName(inEnc), outEncoding = encName(outEnc))
         firstBuffer = true
         AppLog.i("Audio", "DSP configurato: ${encName(inEnc)}, $sampleRate Hz, $channels can. -> ${encName(outEnc)}")
         appliedVersion = -1
@@ -152,50 +142,25 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
     private fun refreshIfNeeded() {
         val v = configVersion
         if (v == appliedVersion) return
-        val cfg = pending
-        val fs = sampleRate.toDouble()
-        val list = EqMath.stages(cfg, fs)
-        val flat = DoubleArray(list.size * 5)
-        for ((i, c) in list.withIndex()) {
-            flat[i * 5] = c.b0
-            flat[i * 5 + 1] = c.b1
-            flat[i * 5 + 2] = c.b2
-            flat[i * 5 + 3] = c.a1
-            flat[i * 5 + 4] = c.a2
-        }
+        val s = pending
         val rgInfo = replayGain ?: scannedGain
-        val rgDb = ReplayGain.gainDb(rgInfo, cfg.replayGain)
-        val preDbEff = cfg.effectivePreampDb(fs) + rgDb
-        val preGain = 10.0.pow(preDbEff / 20.0)
-        stageCount = list.size
-        dsp.setFilters(flat, list.size, preGain)
-        dsp.setStereo(cfg.balanceFactor(), cfg.widthFactor())
-        dsp.setCompressor(
-            cfg.compressorOn, cfg.compThresholdDb, cfg.compRatio, cfg.compAttackMs,
-            cfg.compReleaseMs, cfg.compKneeDb, cfg.compMakeupDb
-        )
-
-        val active = cfg.dspActive() || kotlin.math.abs(rgDb) > 0.01
-        bypass = !active
-        limiterOn = cfg.limiterOn && active
-        dsp.setLimiter(limiterOn, cfg.limiterThresholdDb, cfg.limiterReleaseMs, LIMITER_LOOKAHEAD_MS)
-        preDb = preDbEff.toFloat()
+        val rgDb = ReplayGain.gainDb(rgInfo, s.replayGain)
+        dsp.setParams(s.toNative(rgDb, speaker, listenVolume))
+        bypass = !s.master
         appliedVersion = v
+        val m = dsp.meters(false)
         info = DspInfo(
-            active = active, sampleRate = sampleRate, channels = channels,
+            active = s.master, sampleRate = sampleRate, channels = channels,
             inEncoding = encName(inEnc), outEncoding = encName(outEnc),
-            bypass = bypass, limiter = limiterOn,
-            latencyMs = if (limiterOn) dsp.latencyFrames() * 1000f / sampleRate else 0f,
-            stages = if (active) list.count { it !== EqMath.IDENTITY } else 0,
-            preampDb = preDb,
-            replayGainDb = if (cfg.replayGain != ReplayGain.OFF && rgInfo != null) rgDb.toFloat() else null,
+            bypass = bypass, limiter = s.master && s.limiter,
+            latencyMs = if (sampleRate > 0) dsp.latencyFrames() * 1000f / sampleRate else 0f,
+            stages = if (s.master) m[4].toInt() else 0,
+            inputGainDb = m[3].toFloat(), headroomDb = m[2].toFloat(),
+            replayGainDb = if (s.master && s.replayGain != ReplayGain.OFF && rgInfo != null) rgDb.toFloat() else null,
             replayGainSource = if (rgInfo == null) "" else if (replayGain != null) "tag" else "analisi",
+            modules = if (s.master) activeModules(s, speaker) else emptyList(),
         )
-        AppLog.d(
-            "Audio",
-            "DSP: ${if (bypass) "bypass" else "attivo"}, limiter=${limiterOn}, stadi=${info.stages}, " +
-                "preamp=${"%.1f".format(preDb)} dB"
-        )
+        AppLog.d("Audio", "DSP: ${if (bypass) "bypass" else "attivo"}, stadi=${info.stages}, ingresso=${"%.1f".format(info.inputGainDb)} dB")
     }
 
     private fun directInput(src: ByteBuffer, bytes: Int): Pair<ByteBuffer, Int> {
@@ -218,9 +183,8 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
         refreshIfNeeded()
         if (firstBuffer) {
             firstBuffer = false
-            AppLog.i("Audio", "DSP: primo buffer ricevuto ($remaining byte, diretto=${inputBuffer.isDirect}, analizzatore=${analyzer.enabled})")
+            AppLog.i("Audio", "DSP: primo buffer ricevuto ($remaining byte, diretto=${inputBuffer.isDirect})")
         }
-
         val bps = when (encoding) {
             C.ENCODING_PCM_16BIT -> 2
             C.ENCODING_PCM_24BIT -> 3
@@ -238,9 +202,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
         val outFrames = dsp.process(src, off, inEnc, frames, out, outEnc, bypass)
         out.position(outFrames * channels * outBps)
         out.flip()
-
         if (analyzer.enabled) tap(out, outFrames)
-
         inputBuffer.position(inputBuffer.position() + inBytes)
     }
 
@@ -253,10 +215,10 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
             val l: Float
             val r: Float
             if (is16) {
-                l = b.getShort((base) * 2) / 32768f
+                l = b.getShort(base * 2) / 32768f
                 r = if (ch > 1) b.getShort((base + 1) * 2) / 32768f else l
             } else {
-                l = b.getFloat((base) * 4)
+                l = b.getFloat(base * 4)
                 r = if (ch > 1) b.getFloat((base + 1) * 4) else l
             }
             analyzer.push(l, r)
@@ -265,7 +227,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
 
     override fun onQueueEndOfStream() {
         val resampling = outRate != sampleRate
-        if (!limiterOn && !resampling) return
+        if (dsp.latencyFrames() == 0 && !resampling) return
         val outBps = if (outEnc == NativeDsp.ENC_16) 2 else 4
         val cap = dsp.maxOut(dsp.flushIn() * 2) + 16
         val out = replaceOutputBuffer(cap * channels * outBps)
@@ -275,6 +237,22 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
     }
 
     companion object {
-        const val LIMITER_LOOKAHEAD_MS = 5f
+        /** Nomi brevi dei moduli accesi. */
+        fun activeModules(s: DspSettings, speaker: Boolean): List<String> = buildList {
+            when (s.eqMode) { Modes.EQ_GRAPHIC -> add("EQ grafico"); Modes.EQ_PARAMETRIC -> add("EQ parametrico") }
+            if (s.bassDb > 0f || s.trebleDb > 0f) add("Toni")
+            if (s.analogBass) add("Analog Bass")
+            if (s.tube) add("Tube")
+            if (s.exciter) add("Exciter")
+            if (s.air) add("Hi-Res Air")
+            if (s.hdrMode > 0) add("HDR")
+            if (s.surroundMode > 0) add("Surround+")
+            if (s.mono || s.balance != 0f || s.expand > 0f || s.crossfeed > 0f) add("Stereo")
+            if (s.dbfbMode > 0) add("DBFB")
+            if (s.mobileBass && speaker) add("Mobile Bass")
+            if (s.loudness) add("Loudness")
+            if (s.compressor) add("Compressore")
+            if (s.limiter) add("Limiter")
+        }
     }
 }

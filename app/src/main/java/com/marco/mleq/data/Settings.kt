@@ -5,7 +5,8 @@ import android.content.SharedPreferences
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.marco.mleq.audio.EqConfig
+import com.marco.mleq.audio.DspSettings
+import com.marco.mleq.audio.EqPart
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.properties.ReadWriteProperty
@@ -53,7 +54,7 @@ class StringPref(private val sp: SharedPreferences, private val key: String, def
 }
 
 /** Preset dell'equalizzatore salvato dall'utente (configurazione completa). */
-data class UserPreset(val name: String, val config: EqConfig)
+data class UserPreset(val name: String, val part: EqPart)
 
 class Settings(context: Context) {
     private val sp: SharedPreferences =
@@ -91,24 +92,26 @@ class Settings(context: Context) {
     // Debug
     var verboseLog by BoolPref(sp, "verbose_log", false)
 
-    // Equalizzatore
-    private var eqState by mutableStateOf(EqConfig.fromJson(sp.getString("eq", null)))
+    // Motore DSP (la vecchia chiave "eq" viene convertita al primo avvio)
+    private var dspState by mutableStateOf(
+        DspSettings.fromJson(sp.getString("dsp", null) ?: sp.getString("eq", null))
+    )
 
-    var onEqChanged: ((EqConfig) -> Unit)? = null
+    var onDspChanged: ((DspSettings) -> Unit)? = null
 
-    var eq: EqConfig
-        get() = eqState
+    var dsp: DspSettings
+        get() = dspState
         set(v) {
-            eqState = v
-            sp.edit().putString("eq", v.toJson()).apply()
-            onEqChanged?.invoke(v)
+            dspState = v
+            sp.edit().putString("dsp", v.toJson().toString()).apply()
+            onDspChanged?.invoke(v)
         }
 
-    fun updateEq(block: (EqConfig) -> EqConfig) {
-        eq = block(eqState)
+    fun updateDsp(block: (DspSettings) -> DspSettings) {
+        dsp = block(dspState)
     }
 
-    // Preset utente
+    // Preset utente (solo la parte equalizzatore)
     private var presetsRaw by StringPref(sp, "eq_user_presets", "[]")
 
     val userPresets: List<UserPreset>
@@ -116,18 +119,19 @@ class Settings(context: Context) {
             val a = JSONArray(presetsRaw)
             List(a.length()) { i ->
                 val o = a.getJSONObject(i)
-                UserPreset(o.getString("name"), EqConfig.fromJson(o.getString("cfg")))
+                val part = o.optJSONObject("part")?.let { EqPart.fromJson(it) }
+                    ?: DspSettings.fromJson(o.optString("cfg", "")).eqPart()  // preset della versione precedente
+                UserPreset(o.getString("name"), part)
             }
         } catch (_: Exception) {
             emptyList()
         }
 
-    /** Salva (o sostituisce, se il nome esiste già) un preset con la configurazione attuale. */
-    fun saveUserPreset(name: String, cfg: EqConfig) {
+    /** Salva (o sostituisce, se il nome esiste già) un preset. */
+    fun saveUserPreset(name: String, part: EqPart) {
         val n = name.trim().take(24)
         if (n.isEmpty()) return
-        val list = userPresets.filter { !it.name.equals(n, ignoreCase = true) } + UserPreset(n, cfg.copy(enabled = true))
-        writePresets(list)
+        writePresets(userPresets.filter { !it.name.equals(n, ignoreCase = true) } + UserPreset(n, part))
     }
 
     fun deleteUserPreset(name: String) {
@@ -136,7 +140,27 @@ class Settings(context: Context) {
 
     private fun writePresets(list: List<UserPreset>) {
         val a = JSONArray()
-        for (p in list) a.put(JSONObject().put("name", p.name).put("cfg", p.config.toJson()))
+        for (p in list) a.put(JSONObject().put("name", p.name).put("part", p.part.toJson()))
         presetsRaw = a.toString()
+    }
+
+    // Backup: tutte le impostazioni del DSP e i preset in un unico file
+
+    fun exportBackup(): String = JSONObject()
+        .put("app", "MLEqualizer").put("backup", 1)
+        .put("dsp", dspState.toJson())
+        .put("presets", JSONArray(presetsRaw))
+        .toString(2)
+
+    /** Ripristina un backup; false se il file non è un backup valido. */
+    fun importBackup(text: String): Boolean = try {
+        val o = JSONObject(text.trim().removePrefix("\uFEFF"))
+        if (o.optString("app") != "MLEqualizer" || !o.has("dsp")) false else {
+            dsp = DspSettings.fromJson(o.getJSONObject("dsp").toString())
+            o.optJSONArray("presets")?.let { presetsRaw = it.toString() }
+            true
+        }
+    } catch (_: Exception) {
+        false
     }
 }
