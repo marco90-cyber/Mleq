@@ -82,8 +82,6 @@ private fun fdb(v: Float): String =
 
 private fun bandFreq(i: Int): Float = 1000f * 2f.pow((i - 17) / 3f)
 
-private fun fmtHz(f: Float): String =
-    if (f >= 1000f) String.format(Locale.ITALY, "%.2f kHz", f / 1000f) else "${f.roundToInt()} Hz"
 
 /** Stato e calcoli dell'analizzatore (livelli, PPM, goniometro, 1/3 d'ottava). */
 private class AnalyzerState {
