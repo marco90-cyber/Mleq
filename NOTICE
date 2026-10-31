@@ -1,15 +1,19 @@
 MLEqualizer - avvisi di terze parti
 
-Origine: il motore DSP, l'equalizzatore, l'analizzatore e i preset derivano da MLPod
-(https://github.com/marco90-cyber/MLPod), stesso autore, licenza GPL-3.0-or-later.
+Tutto il codice del motore DSP (app/src/main/cpp/dsp_*.h) e dell'app e' scritto per questo progetto.
+Le funzioni dei moduli (Analog Bass, Tube Warmth, Hi-Res Air, HDR Dynamics, Surround+, DBFB, Mobile Bass,
+Harmonic Exciter) si ispirano a quelle descritte da altre app, ma nessun codice di quelle app e' stato
+copiato o tradotto.
 
 Tryptify (https://github.com/tryptz/Tryptify) - GPL-3.0
-  L'algoritmo del limiter look-ahead in app/src/main/cpp/mleq_dsp.h (massimo mobile con deque
+  L'algoritmo del limiter look-ahead in app/src/main/cpp/dsp_modules.h (massimo mobile con deque
   monotona, ritardo look-ahead, rilascio esponenziale) si ispira a LimiterProcessor
-  (app/src/main/cpp/dsp/snapins/limiter.h). Il codice e' stato riscritto e modificato:
-  canali multipli, contatori a 64 bit, garanzia di soglia.
+  (app/src/main/cpp/dsp/snapins/limiter.h). Il codice e' stato riscritto: canali multipli, contatori
+  a 64 bit, rilevatore true-peak, tenuta sui bassi, garanzia di soglia.
 
 Audio EQ Cookbook, Robert Bristow-Johnson - formule dei filtri biquad (nessun codice incluso).
+
+ITU-R BS.1770-4 / EBU R128 - definizione della misura di loudness (coefficienti pubblici della norma).
 
 libsoxr (SoX Resampler Library) - Copyright (c) 2007-18 robs@users.sourceforge.net
 Licenza: GNU LGPL v2.1 o successiva (testo in app/src/main/cpp/soxr/LICENCE e COPYING.LGPL).
