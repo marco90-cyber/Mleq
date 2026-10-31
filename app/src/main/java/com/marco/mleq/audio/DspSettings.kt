@@ -39,7 +39,6 @@ object Modes {
     const val EQ_GRAPHIC = 1
     const val EQ_PARAMETRIC = 2
 
-    val hdr = listOf("Spento", "Pure", "Restoration")
     val surround = listOf("Spento", "Tradizionale", "Palco frontale", "Ultra Wide")
     val dbfb = listOf("Spento", "Normale", "Alto")
     val replayGain = listOf("Spento", "Brano", "Album")
@@ -62,6 +61,7 @@ data class DspSettings(
     val parametric: List<PeqBand> = defaultParametric(),
 
     // Toni (come Poweramp: shelf con frequenza e Q)
+    val tone: Boolean = true,
     val bassDb: Float = 0f,
     val bassFreq: Float = 90f,
     val bassQ: Float = 0.8f,
@@ -74,32 +74,20 @@ data class DspSettings(
     val analogDrive: Float = 0.4f,
     val analogWarmth: Float = 0.5f,
     val analogFreq: Float = 60f,
-    val tube: Boolean = false,
-    val tubeAmount: Float = 0.5f,
-    val exciter: Boolean = false,
-    val exciterAmount: Float = 0.4f,
     val air: Boolean = false,
     val airAmount: Float = 0.5f,
-    val hdrMode: Int = 0,
+    /** Scheda "Surround+ e stereo" accesa. */
+    val stereo: Boolean = false,
     val surroundMode: Int = 0,
     val balance: Float = 0f,
     val expand: Float = 0f,
     val mono: Boolean = false,
     val crossfeed: Float = 0f,
     val dbfbMode: Int = 0,
-    val mobileBass: Boolean = false,
-    val mobileBassAmount: Float = 0.6f,
     val loudness: Boolean = false,
     val loudnessAmount: Float = 0.7f,
 
-    // Dinamica
-    val compressor: Boolean = false,
-    val compThresholdDb: Float = -18f,
-    val compRatio: Float = 3f,
-    val compAttackMs: Float = 10f,
-    val compReleaseMs: Float = 150f,
-    val compKneeDb: Float = 6f,
-    val compMakeupDb: Float = 0f,
+    // Livello
     val limiter: Boolean = true,
     val limiterThresholdDb: Float = -0.5f,
     val limiterReleaseMs: Float = 80f,
@@ -107,8 +95,8 @@ data class DspSettings(
     /** ReplayGain: 0 = spento, 1 = brano, 2 = album (vedi [ReplayGain]). */
     val replayGain: Int = ReplayGain.OFF,
 ) {
-    /** Testo per il motore nativo. [rgDb] ReplayGain del brano, [speaker] uscita sull'altoparlante, [volume] 0..1 lineare. */
-    fun toNative(rgDb: Double = 0.0, speaker: Boolean = false, volume: Double = 1.0): String {
+    /** Testo per il motore nativo. [rgDb] ReplayGain del brano, [volume] volume del telefono 0..1 lineare. */
+    fun toNative(rgDb: Double = 0.0, volume: Double = 1.0): String {
         val sb = StringBuilder(1024)
         fun put(k: String, v: Any) { sb.append(k).append('=').append(v).append(';') }
         fun f(v: Float) = String.format(Locale.US, "%.4f", v)
@@ -120,19 +108,14 @@ data class DspSettings(
             val p = parametric.getOrElse(i) { PeqBand() }
             put("peq.$i", "${b(p.on)},${p.type.ordinal},${f(p.freq)},${f(p.gain)},${f(p.q)}")
         }
-        put("bass", f(bassDb)); put("bass.f", f(bassFreq)); put("bass.q", f(bassQ))
-        put("treble", f(trebleDb)); put("treble.f", f(trebleFreq)); put("treble.q", f(trebleQ))
+        put("bass", f(if (tone) bassDb else 0f)); put("bass.f", f(bassFreq)); put("bass.q", f(bassQ))
+        put("treble", f(if (tone) trebleDb else 0f)); put("treble.f", f(trebleFreq)); put("treble.q", f(trebleQ))
         put("abass", b(analogBass)); put("abass.drive", f(analogDrive)); put("abass.warmth", f(analogWarmth)); put("abass.f", f(analogFreq))
-        put("tube", b(tube)); put("tube.amount", f(tubeAmount))
-        put("exciter", b(exciter)); put("exciter.amount", f(exciterAmount))
         put("air", b(air)); put("air.amount", f(airAmount))
-        put("hdr", hdrMode); put("surround", surroundMode)
+        put("surround", if (stereo) surroundMode else 0); put("stereo", b(stereo))
         put("balance", f(balance)); put("expand", f(expand)); put("mono", b(mono)); put("crossfeed", f(crossfeed))
         put("dbfb", dbfbMode)
-        put("mbass", b(mobileBass)); put("mbass.amount", f(mobileBassAmount)); put("speaker", b(speaker))
         put("loud", b(loudness)); put("loud.amount", f(loudnessAmount)); put("volume", String.format(Locale.US, "%.4f", volume))
-        put("comp", b(compressor)); put("comp.thr", f(compThresholdDb)); put("comp.ratio", f(compRatio))
-        put("comp.atk", f(compAttackMs)); put("comp.rel", f(compReleaseMs)); put("comp.knee", f(compKneeDb)); put("comp.makeup", f(compMakeupDb))
         put("lim", b(limiter)); put("lim.thr", f(limiterThresholdDb)); put("lim.rel", f(limiterReleaseMs))
         return sb.toString()
     }
@@ -166,19 +149,14 @@ data class DspSettings(
         o.put("eqMode", eqMode); o.put("faithful", faithful)
         o.put("graphic", JSONArray(graphic.map { it.toDouble() }))
         o.put("parametric", bandsToJson(parametric))
-        o.put("bass", bassDb.toDouble()); o.put("bassF", bassFreq.toDouble()); o.put("bassQ", bassQ.toDouble())
+        o.put("tone", tone); o.put("bass", bassDb.toDouble()); o.put("bassF", bassFreq.toDouble()); o.put("bassQ", bassQ.toDouble())
         o.put("treble", trebleDb.toDouble()); o.put("trebleF", trebleFreq.toDouble()); o.put("trebleQ", trebleQ.toDouble())
         o.put("abass", analogBass); o.put("abassDrive", analogDrive.toDouble()); o.put("abassWarmth", analogWarmth.toDouble()); o.put("abassF", analogFreq.toDouble())
-        o.put("tube", tube); o.put("tubeAmount", tubeAmount.toDouble())
-        o.put("exciter", exciter); o.put("exciterAmount", exciterAmount.toDouble())
         o.put("air", air); o.put("airAmount", airAmount.toDouble())
-        o.put("hdr", hdrMode); o.put("surround", surroundMode)
+        o.put("stereo", stereo); o.put("surround", surroundMode)
         o.put("balance", balance.toDouble()); o.put("expand", expand.toDouble()); o.put("mono", mono); o.put("crossfeed", crossfeed.toDouble())
         o.put("dbfb", dbfbMode)
-        o.put("mbass", mobileBass); o.put("mbassAmount", mobileBassAmount.toDouble())
         o.put("loud", loudness); o.put("loudAmount", loudnessAmount.toDouble())
-        o.put("comp", compressor); o.put("compThr", compThresholdDb.toDouble()); o.put("compRatio", compRatio.toDouble())
-        o.put("compAtk", compAttackMs.toDouble()); o.put("compRel", compReleaseMs.toDouble()); o.put("compKnee", compKneeDb.toDouble()); o.put("compMakeup", compMakeupDb.toDouble())
         o.put("lim", limiter); o.put("limThr", limiterThresholdDb.toDouble()); o.put("limRel", limiterReleaseMs.toDouble())
         o.put("rg", replayGain)
         return o
@@ -251,22 +229,19 @@ data class DspSettings(
                 graphic = List(GRAPHIC_BANDS) { i -> (ga?.optDouble(i, 0.0) ?: 0.0).toFloat().takeIf { it.isFinite() }?.coerceIn(-GRAPHIC_GAIN, GRAPHIC_GAIN) ?: 0f },
                 faithful = o.optBoolean("faithful", true),
                 parametric = bandsFromJson(o.optJSONArray("parametric")),
+                tone = o.optBoolean("tone", true),
                 bassDb = o.f("bass", 0f, 0f, TONE_MAX_DB), bassFreq = o.f("bassF", d.bassFreq, 20f, 500f), bassQ = o.f("bassQ", d.bassQ, 0.1f, 2f),
                 trebleDb = o.f("treble", 0f, 0f, TONE_MAX_DB), trebleFreq = o.f("trebleF", d.trebleFreq, 1000f, 20000f), trebleQ = o.f("trebleQ", d.trebleQ, 0.1f, 2f),
                 analogBass = o.optBoolean("abass", false), analogDrive = o.f("abassDrive", d.analogDrive, 0f, 1f),
                 analogWarmth = o.f("abassWarmth", d.analogWarmth, 0f, 1f), analogFreq = o.f("abassF", d.analogFreq, 20f, 120f),
-                tube = o.optBoolean("tube", false), tubeAmount = o.f("tubeAmount", d.tubeAmount, 0f, 1f),
-                exciter = o.optBoolean("exciter", false), exciterAmount = o.f("exciterAmount", d.exciterAmount, 0f, 1f),
                 air = o.optBoolean("air", false), airAmount = o.f("airAmount", d.airAmount, 0f, 1f),
-                hdrMode = o.optInt("hdr", 0).coerceIn(0, 2), surroundMode = o.optInt("surround", 0).coerceIn(0, 3),
+                stereo = if (o.has("stereo")) o.optBoolean("stereo", false) else
+                    o.optInt("surround", 0) > 0 || o.optDouble("balance", 0.0) != 0.0 || o.optDouble("expand", 0.0) > 0.0 ||
+                        o.optDouble("crossfeed", 0.0) > 0.0 || o.optBoolean("mono", false),
+                surroundMode = o.optInt("surround", 0).coerceIn(0, 3),
                 balance = o.f("balance", 0f, -1f, 1f), expand = o.f("expand", 0f, 0f, 1f), mono = o.optBoolean("mono", false),
                 crossfeed = o.f("crossfeed", 0f, 0f, 1f), dbfbMode = o.optInt("dbfb", 0).coerceIn(0, 2),
-                mobileBass = o.optBoolean("mbass", false), mobileBassAmount = o.f("mbassAmount", d.mobileBassAmount, 0f, 1f),
                 loudness = o.optBoolean("loud", false), loudnessAmount = o.f("loudAmount", d.loudnessAmount, 0f, 1f),
-                compressor = o.optBoolean("comp", false), compThresholdDb = o.f("compThr", d.compThresholdDb, -60f, 0f),
-                compRatio = o.f("compRatio", d.compRatio, 1f, 20f), compAttackMs = o.f("compAtk", d.compAttackMs, 0.5f, 100f),
-                compReleaseMs = o.f("compRel", d.compReleaseMs, 20f, 2000f), compKneeDb = o.f("compKnee", d.compKneeDb, 0f, 24f),
-                compMakeupDb = o.f("compMakeup", d.compMakeupDb, 0f, 24f),
                 limiter = o.optBoolean("lim", true), limiterThresholdDb = o.f("limThr", d.limiterThresholdDb, -12f, 0f),
                 limiterReleaseMs = o.f("limRel", d.limiterReleaseMs, 5f, 1000f),
                 replayGain = o.optInt("rg", 0).coerceIn(0, 2),
@@ -275,7 +250,7 @@ data class DspSettings(
 
         /**
          * Vecchio formato (EqConfig): le bande diventano l'equalizzatore parametrico (fino a 16),
-         * manopole, stereo, compressore, limiter e ReplayGain restano quelli scelti.
+         * manopole, stereo, limiter e ReplayGain restano quelli scelti.
          */
         private fun migrateV1(o: JSONObject): DspSettings {
             val d = DspSettings()
@@ -304,16 +279,10 @@ data class DspSettings(
                 limiter = o.optBoolean("limiter", true),
                 limiterThresholdDb = o.optDouble("limThr", -0.5).toFloat().coerceIn(-12f, 0f),
                 limiterReleaseMs = o.optDouble("limRel", 80.0).toFloat().coerceIn(5f, 1000f),
+                stereo = o.optInt("balance", 0) != 0 || o.optInt("expand", 0) > 0 || o.optBoolean("mono", false),
                 balance = (o.optInt("balance", 0) / 100f).coerceIn(-1f, 1f),
                 expand = (o.optInt("expand", 0) / 100f).coerceIn(0f, 1f),
                 mono = o.optBoolean("mono", false),
-                compressor = o.optBoolean("comp", false),
-                compThresholdDb = o.optDouble("compThr", -18.0).toFloat().coerceIn(-60f, 0f),
-                compRatio = o.optDouble("compRatio", 3.0).toFloat().coerceIn(1f, 20f),
-                compAttackMs = o.optDouble("compAtk", 10.0).toFloat().coerceIn(0.5f, 100f),
-                compReleaseMs = o.optDouble("compRel", 150.0).toFloat().coerceIn(20f, 2000f),
-                compKneeDb = o.optDouble("compKnee", 6.0).toFloat().coerceIn(0f, 24f),
-                compMakeupDb = o.optDouble("compMakeup", 0.0).toFloat().coerceIn(0f, 24f),
                 replayGain = o.optInt("replayGain", 0).coerceIn(0, 2),
             )
         }

@@ -44,14 +44,13 @@ JNIEXPORT jint JNICALL Java_com_marco_mleq_audio_NativeDsp_nFlushIn(JNIEnv*, job
 
 JNIEXPORT jint JNICALL Java_com_marco_mleq_audio_NativeDsp_nLatency(JNIEnv*, jobject, jlong h) { return E(h)->latencyFrames(); }
 
-// out: [0] riduzione limiter dB, [1] riduzione compressore dB, [2] headroom dB, [3] guadagno d'ingresso dB, [4] stadi attivi
+// out: [0] riduzione limiter dB, [1] headroom dB, [2] guadagno d'ingresso dB, [3] stadi attivi
 JNIEXPORT void JNICALL Java_com_marco_mleq_audio_NativeDsp_nMeters(JNIEnv* env, jobject, jlong h, jdoubleArray out, jboolean reset) {
-    if (env->GetArrayLength(out) < 5) return;
+    if (env->GetArrayLength(out) < 4) return;
     Engine* e = E(h);
-    jdouble v[5] = {e->limiterMinGainDb(), e->compressorMinGainDb(), e->headroomDb(), e->inputGainDb(),
-                    static_cast<jdouble>(e->activeStages())};
+    jdouble v[4] = {e->limiterMinGainDb(), e->headroomDb(), e->inputGainDb(), static_cast<jdouble>(e->activeStages())};
     if (reset == JNI_TRUE) e->resetMeters();
-    env->SetDoubleArrayRegion(out, 0, 5, v);
+    env->SetDoubleArrayRegion(out, 0, 4, v);
 }
 
 // Risposta in dB della pila lineare alle frequenze date (per il grafico).

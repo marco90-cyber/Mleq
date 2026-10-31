@@ -5,9 +5,8 @@
 // Catena (in quest'ordine):
 //   decodifica -> guadagno d'ingresso (preamp + ReplayGain + headroom, con rampa)
 //   -> pila di filtri lineari con rampa dei coefficienti (EQ grafico o parametrico, toni,
-//      Analog Bass, Tube, Air, HDR, Surround, Loudness, Mobile Bass)
-//   -> Analog Bass Drive -> Tube Warmth -> Exciter -> Mobile Bass virtuale -> DBFB
-//   -> stereo (crossfeed, larghezza, bilanciamento, mono) -> HDR (espansore) -> compressore
+//      Analog Bass, Air, Surround, Loudness)
+//   -> Analog Bass Drive -> DBFB -> stereo (crossfeed, larghezza, bilanciamento, mono)
 //   -> limiter true-peak -> ricampionatore -> codifica (dither TPDF).
 // Con "master" spento l'audio passa intatto (PCM16 bit-exact).
 #pragma once
@@ -39,13 +38,10 @@ enum Slot : int {
     kSlotEq = 0,                       // 16 posti: grafico (15) o parametrico (16)
     kSlotBass = 16, kSlotTreble = 17,
     kSlotPultecBoost = 18, kSlotPultecDip = 19,
-    kSlotTubeBloom = 20, kSlotTubeRoll = 21,
-    kSlotAir1 = 22, kSlotAir2 = 23,
-    kSlotHdr1 = 24, kSlotHdr2 = 25,
-    kSlotSmileLo = 26, kSlotSmileHi = 27, kSlotPresence = 28,
-    kSlotLoudLo = 29, kSlotLoudHi = 30,
-    kSlotSpkHp = 31, kSlotSpkBell = 32,
-    kSlots = 33
+    kSlotAir1 = 20, kSlotAir2 = 21,
+    kSlotSmileLo = 22, kSlotSmileHi = 23, kSlotPresence = 24,
+    kSlotLoudLo = 25, kSlotLoudHi = 26,
+    kSlots = 27
 };
 
 class Engine {
@@ -57,10 +53,8 @@ public:
         ch_ = std::max(1, std::min(channels, 8));
         state_.assign(static_cast<size_t>(ch_) * kSlots, BiquadState{});
         rampLeft_ = 0;
-        drive_.prepare(sr_, ch_); tube_.prepare(sr_, ch_); exciter_.prepare(sr_, ch_);
-        vbass_.prepare(sr_, ch_); punch_.prepare(sr_, ch_);
+        drive_.prepare(sr_, ch_); punch_.prepare(sr_, ch_);
         stereo_.prepare(sr_);
-        hdr_.prepare(sr_, ch_); comp_.prepare(sr_, ch_);
         limiter_.prepare(sr_, ch_, kLookMs);
         rsOn_ = false;
         configured_ = true;
@@ -79,10 +73,9 @@ public:
     double inputGainDb() const { return inDb_; }
     int activeStages() const { int n = 0; for (const Coef& c : coef_) if (!c.identity()) n++; return n; }
 
-    int latencyFrames() const { return bypass() ? 0 : (p_.limOn ? limiter_.latency() : 0) + tube_.latency(); }
+    int latencyFrames() const { return bypass() ? 0 : (p_.limOn ? limiter_.latency() : 0); }
     double limiterMinGainDb() const { return limiter_.minGainDb(); }
-    double compressorMinGainDb() const { return comp_.minGainDb(); }
-    void resetMeters() { limiter_.resetMeter(); comp_.resetMeter(); }
+    void resetMeters() { limiter_.resetMeter(); }
 
     /** Risposta in dB della pila lineare (per il grafico e i test). */
     double responseDb(double f) const {
@@ -99,8 +92,8 @@ public:
         cur_ = coef_;
         rampLeft_ = 0;
         inCur_ = inTarget_;
-        drive_.reset(); tube_.reset(); exciter_.reset(); vbass_.reset(); punch_.reset();
-        stereo_.reset(); hdr_.reset(); comp_.reset(); limiter_.reset();
+        drive_.reset(); punch_.reset();
+        stereo_.reset(); limiter_.reset();
         if (rsOn_) rs_.reset();
     }
 
@@ -185,20 +178,10 @@ private:
             c[kSlotPultecBoost] = design::shelfQ(fs, p.abassFreq, 8.0 * p.abassWarmth, 0.7, true);
             c[kSlotPultecDip] = design::peak(fs, p.abassFreq * 4.0, 0.9, -4.0 * p.abassWarmth);
         }
-        // Tube Warmth: "fioritura" in basso e trasformatore d'uscita che arrotonda gli acuti
-        if (p.tubeOn) {
-            c[kSlotTubeBloom] = design::peak(fs, 80.0, 0.7, 2.0 * p.tubeAmount);
-            if (inRange(10000)) c[kSlotTubeRoll] = design::shelfQ(fs, 10000.0, -2.5 * p.tubeAmount, 0.7, false);
-        }
         // Hi-Res Air
         if (p.airOn) {
             if (inRange(6000)) c[kSlotAir1] = design::shelfQ(fs, 6000.0, 2.5 * p.airAmount, 0.7, false);
             if (inRange(12000)) c[kSlotAir2] = design::shelfQ(fs, 12000.0, 2.0 * p.airAmount, 0.7, false);
-        }
-        // HDR Restoration: piccolo recupero d'aria
-        if (p.hdrMode == 2) {
-            if (inRange(10000)) c[kSlotHdr1] = design::shelfQ(fs, 10000.0, 0.6, 0.7, false);
-            if (inRange(16000)) c[kSlotHdr2] = design::shelfQ(fs, 16000.0, 0.4, 0.7, false);
         }
         // Surround+: "sorriso" uguale nelle due orecchie, i medi (voci) restano intatti
         double hiWidth = 1.0;
@@ -215,12 +198,6 @@ private:
             c[kSlotLoudLo] = design::shelfQ(fs, 100.0, p.loudnessAmount * std::min(12.0, att * 0.33), 0.7, true);
             if (inRange(10000)) c[kSlotLoudHi] = design::shelfQ(fs, 10000.0, p.loudnessAmount * std::min(6.0, att * 0.15), 0.7, false);
         }
-        // Mobile Bass: solo sull'altoparlante del telefono
-        const bool mb = p.mobileBassOn && p.speakerRoute;
-        if (mb) {
-            c[kSlotSpkHp] = design::highPass(fs, 100.0, 0.7071);
-            c[kSlotSpkBell] = design::peak(fs, 180.0, 1.0, 3.0 * p.mobileBassAmount);
-        }
         for (Coef& x : c) if (!stable(x)) x = Coef{};
 
         // ingresso: preamp + ReplayGain - headroom
@@ -228,7 +205,7 @@ private:
         double head = 0;
         if (p.autoHeadroom) {
             for (int i = 0; i < 256; i++) head = std::max(head, responseDb(20.0 * std::pow(1000.0, i / 255.0)));
-            const double w = p.mono ? 0.0 : (1.0 + p.expand) * hiWidth;
+            const double w = p.stereoOn ? (p.mono ? 0.0 : (1.0 + p.expand) * hiWidth) : hiWidth;
             if (w > 1.0) head += linToDb((1.0 + w) / 2.0);
         }
         headroomDb_ = head;
@@ -237,14 +214,12 @@ private:
 
         // moduli
         drive_.set(p.abassOn, p.abassDrive);
-        tube_.set(p.tubeOn, p.tubeAmount);
-        exciter_.set(p.exciterOn, p.exciterAmount);
-        vbass_.set(mb, p.mobileBassAmount);
         punch_.set(p.dbfbMode);
-        if (ch_ == 2) stereo_.set(p.balance, p.mono ? 0.0 : 1.0 + p.expand, hiWidth, p.crossfeed);
-        hdr_.set(p.hdrMode == 2, true, -38.0, 1.12, 5.0, 200.0, 6.0, 0.0);
-        comp_.set(p.compOn, false, p.compThr, p.compRatio, p.compAtk, p.compRel, p.compKnee, p.compMakeup);
-        limiter_.set(p.hdrMode == 1 ? -0.1 : p.limThr, p.limRel);
+        if (ch_ == 2) {
+            if (p.stereoOn) stereo_.set(p.balance, p.mono ? 0.0 : 1.0 + p.expand, hiWidth, p.crossfeed);
+            else stereo_.set(0.0, 1.0, hiWidth, 0.0);
+        }
+        limiter_.set(p.limThr, p.limRel);
 
         if (snap || cur_.size() != coef_.size()) {
             cur_ = coef_;
@@ -375,13 +350,8 @@ private:
         rampLeft_ -= nr;
 
         drive_.process(w, frames);
-        tube_.process(w, frames);
-        exciter_.process(w, frames);
-        vbass_.process(w, frames);
         punch_.process(w, frames);
         if (ch_ == 2) stereo_.process(w, frames);
-        hdr_.process(w, frames);
-        comp_.process(w, frames);
         if (p_.limOn) limiter_.process(w, frames);
 
         bool bad = false;
@@ -466,12 +436,8 @@ private:
     std::vector<float> scratch_, rsOut_;
     std::vector<double> work_;
     BassDrive drive_;
-    TubeStage tube_;
-    Exciter exciter_;
-    VirtualBass vbass_;
     BassPunch punch_;
     StereoStage stereo_;
-    Dynamics hdr_, comp_;
     Limiter limiter_;
     Resampler rs_;
     bool rsOn_ = false;

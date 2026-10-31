@@ -7,7 +7,7 @@ import androidx.compose.runtime.setValue
 import com.marco.mleq.MLEqApp
 
 /** Schermate a tutto schermo sopra l'equalizzatore. */
-enum class Overlay { None, Analyzer, Output, Log, Graphic, Parametric }
+enum class Overlay { None, Analyzer, Output, Log, Graphic, Parametric, About }
 
 /** Azioni che richiedono l'Activity (selettore file, condivisione del log). */
 interface Actions {

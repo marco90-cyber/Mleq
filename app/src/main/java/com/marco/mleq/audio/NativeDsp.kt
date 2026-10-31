@@ -27,9 +27,9 @@ class NativeDsp {
 
     fun latencyFrames(): Int = if (handle != 0L) nLatency(handle) else 0
 
-    /** Misure: riduzione limiter, riduzione compressore, headroom, guadagno d'ingresso (dB), stadi attivi. */
+    /** Misure: riduzione limiter, headroom, guadagno d'ingresso (dB), stadi attivi. */
     fun meters(reset: Boolean): DoubleArray {
-        val out = DoubleArray(5)
+        val out = DoubleArray(4)
         if (handle != 0L) nMeters(handle, out, reset)
         return out
     }

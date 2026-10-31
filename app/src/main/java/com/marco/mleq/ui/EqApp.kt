@@ -49,6 +49,7 @@ fun EqApp(env: AppEnv) {
             OverlayHost(env, env.overlay == Overlay.Log) { LogScreen(env) }
             OverlayHost(env, env.overlay == Overlay.Graphic) { GraphicEqScreen(env) }
             OverlayHost(env, env.overlay == Overlay.Parametric) { ParametricEqScreen(env) }
+            OverlayHost(env, env.overlay == Overlay.About) { AboutScreen(env) }
         }
         com.marco.mleq.AppUpdateHost()
     }

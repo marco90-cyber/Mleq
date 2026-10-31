@@ -22,16 +22,16 @@ class DspSettingsTest {
 
     @Test
     fun nativeTextCarriesEveryParameter() {
-        val s = DspSettings(master = true, bassDb = 6f, bassQ = 1.2f, tube = true, surroundMode = 3)
+        val s = DspSettings(master = true, bassDb = 6f, bassQ = 1.2f, stereo = true, surroundMode = 3)
             .withGraphic(3, 4.5f)
             .withBand(2, PeqBand(true, FilterType.Notch, 3000f, 0f, 8f))
-        val m = map(s.toNative(rgDb = -6.5, speaker = true, volume = 0.5))
+        val m = map(s.toNative(rgDb = -6.5, volume = 0.5))
         assertEquals("1", m["master"])
         assertEquals("6.0000", m["bass"]); assertEquals("1.2000", m["bass.q"])
-        assertEquals("1", m["tube"]); assertEquals("3", m["surround"])
+        assertEquals("1", m["stereo"]); assertEquals("3", m["surround"])
         assertEquals("4.5000", m["geq.3"])
         assertEquals("1,6,3000.0000,0.0000,8.0000", m["peq.2"])
-        assertEquals("-6.500", m["rg"]); assertEquals("1", m["speaker"]); assertEquals("0.5000", m["volume"])
+        assertEquals("-6.500", m["rg"]); assertEquals("0.5000", m["volume"])
         // il punto decimale e' sempre '.', qualunque sia la lingua del telefono
         assertFalse(s.toNative().contains(",0000;"))
     }
@@ -41,9 +41,9 @@ class DspSettingsTest {
         val s = DspSettings(
             master = true, preampDb = -3f, eqMode = Modes.EQ_PARAMETRIC, faithful = false,
             bassDb = 4f, bassFreq = 120f, bassQ = 0.5f, trebleDb = 2f, trebleFreq = 8000f, trebleQ = 1.1f,
-            analogBass = true, analogDrive = 0.7f, analogWarmth = 0.2f, analogFreq = 30f, tube = true, tubeAmount = 0.9f,
-            exciter = true, air = true, hdrMode = 2, surroundMode = 1, balance = -0.3f, expand = 0.4f, mono = false,
-            crossfeed = 0.6f, dbfbMode = 2, mobileBass = true, loudness = true, compressor = true, compRatio = 4.5f,
+            tone = false, analogBass = true, analogDrive = 0.7f, analogWarmth = 0.2f, analogFreq = 30f,
+            air = true, stereo = true, surroundMode = 1, balance = -0.3f, expand = 0.4f, mono = false,
+            crossfeed = 0.6f, dbfbMode = 2, loudness = true,
             limiter = false, limiterThresholdDb = -2f, replayGain = ReplayGain.ALBUM,
         ).withGraphic(0, -5f).withBand(15, PeqBand(true, FilterType.HighPass, 40f, 0f, 0.7f))
         assertEquals(s, DspSettings.fromJson(s.toJson().toString()))
@@ -51,10 +51,10 @@ class DspSettingsTest {
 
     @Test
     fun outOfRangeValuesAreClamped() {
-        val s = DspSettings.fromJson("""{"v":2,"bass":99,"bassQ":9,"compRatio":0,"graphic":[50,-50],"parametric":[{"on":true,"type":42,"f":1,"g":99,"q":0}]}""")
+        val s = DspSettings.fromJson("""{"v":2,"bass":99,"bassQ":9,"limThr":5,"graphic":[50,-50],"parametric":[{"on":true,"type":42,"f":1,"g":99,"q":0}]}""")
         assertEquals(DspSettings.TONE_MAX_DB, s.bassDb, 0f)
         assertEquals(2f, s.bassQ, 0f)
-        assertEquals(1f, s.compRatio, 0f)
+        assertEquals(0f, s.limiterThresholdDb, 0f)
         assertEquals(DspSettings.GRAPHIC_GAIN, s.graphic[0], 0f)
         assertEquals(-DspSettings.GRAPHIC_GAIN, s.graphic[1], 0f)
         val b = s.parametric[0]
@@ -74,8 +74,8 @@ class DspSettingsTest {
         assertFalse(s.parametric[3].on)
         assertEquals(5f, s.bassDb, 1e-4f); assertEquals(2f, s.trebleDb, 1e-4f)
         assertEquals(-4f, s.preampDb, 0f)
+        assertTrue(s.stereo)
         assertEquals(-0.4f, s.balance, 1e-6f); assertEquals(0.3f, s.expand, 1e-6f)
-        assertTrue(s.compressor); assertEquals(5f, s.compRatio, 0f)
         assertEquals(ReplayGain.TRACK, s.replayGain)
     }
 
@@ -97,5 +97,21 @@ class DspSettingsTest {
     @Test
     fun graphicPresetsHaveFifteenBands() {
         for (p in GraphicPresets.all) assertEquals(p.name, DspSettings.GRAPHIC_BANDS, p.gains.size)
+    }
+
+    @Test
+    fun offModulesSendNeutralValues() {
+        val s = DspSettings(master = true, tone = false, bassDb = 8f, stereo = false, surroundMode = 3, balance = 1f)
+        val m = map(s.toNative())
+        assertEquals("0.0000", m["bass"])
+        assertEquals("0", m["surround"])
+        assertEquals("0", m["stereo"])
+    }
+
+    @Test
+    fun earlierV2SettingsTurnStereoOnWhenUsed() {
+        assertTrue(DspSettings.fromJson("""{"v":2,"balance":0.5}""").stereo)
+        assertFalse(DspSettings.fromJson("""{"v":2}""").stereo)
+        assertTrue(DspSettings.fromJson("""{"v":2}""").tone)
     }
 }

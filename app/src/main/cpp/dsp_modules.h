@@ -31,101 +31,10 @@ struct Smoothed {
     bool settled() const { return std::fabs(cur - target) < 1e-7; }
 };
 
-// ----------------------------------------------------------------------------- sovracampionamento
-
-/**
- * Sovracampionamento x2 con filtro mezza-banda FIR (sinc con finestra di Kaiser, 47 punti):
- * le saturazioni lavorano a frequenza doppia, cosi' le armoniche oltre Nyquist non tornano
- * indietro come rumore "metallico" (aliasing).
- */
-class Oversampler2x {
-public:
-    static constexpr int kTaps = 47;              // filtro mezza-banda: centro + 24 prese dispari
-    static constexpr int kHalf = (kTaps - 1) / 2; // 23
-    static constexpr int kSide = (kTaps + 1) / 2; // 24 prese non nulle oltre al centro
-    /** Ritardo complessivo salita + discesa, in campioni alla frequenza originale. */
-    static constexpr int kLatency = kHalf;
-    Oversampler2x() {
-        const double beta = 8.0;
-        auto i0 = [](double x) {
-            double s = 1, t = 1;
-            for (int k = 1; k < 40; k++) { t *= (x / (2.0 * k)) * (x / (2.0 * k)); s += t; }
-            return s;
-        };
-        double h[kTaps], sum = 0;
-        for (int i = 0; i < kTaps; i++) {
-            const double n = i - kHalf, t = n / 2.0;
-            const double sinc = n == 0 ? 1.0 : std::sin(kPi * t) / (kPi * t);
-            const double r = n / kHalf;
-            h[i] = sinc * i0(beta * std::sqrt(std::max(0.0, 1.0 - r * r))) / i0(beta);
-            sum += h[i];
-        }
-        // le prese a distanza pari dal centro sono nulle (mezza-banda): si tengono solo quelle utili
-        for (int j = 0; j < kSide; j++) e_[j] = h[2 * j] / sum;
-        c_ = h[kHalf] / sum;
-        reset();
-    }
-    void reset() {
-        std::fill(x_, x_ + 2 * kSide, 0.0); std::fill(b_, b_ + 2 * kSide, 0.0); std::fill(a_, a_ + 2 * kSide, 0.0);
-        px_ = pb_ = pa_ = 0;
-    }
-
-    /** Un campione -> due campioni a frequenza doppia (forma polifase dell'interpolatore). */
-    inline void up(double x, double& a, double& b) {
-        push(x_, px_, x);
-        a = 2.0 * dot(x_ + px_);
-        b = 2.0 * c_ * x_[px_ + kSide / 2 - 1];  // x[k-11]: unica presa non nulla della fase dispari
-    }
-
-    /** Due campioni a frequenza doppia -> uno (forma polifase del decimatore). */
-    inline double down(double a, double b) {
-        push(a_, pa_, a);
-        push(b_, pb_, b);
-        return dot(b_ + pb_) + c_ * a_[pa_ + kSide / 2 - 1];
-    }
-
-private:
-    static inline void push(double* buf, int& p, double v) {
-        p = (p + kSide - 1) % kSide;
-        buf[p] = v;
-        buf[p + kSide] = v;
-    }
-    inline double dot(const double* x) const {
-        double acc = 0;
-        for (int j = 0; j < kSide; j++) acc += e_[j] * x[j];
-        return acc;
-    }
-    double e_[kSide] = {}, c_ = 0.5;
-    double x_[2 * kSide] = {}, a_[2 * kSide] = {}, b_[2 * kSide] = {};
-    int px_ = 0, pa_ = 0, pb_ = 0;
-};
-
-/** Linea di ritardo fissa (per allineare il segnale secco a quello sovracampionato). */
-class Delay {
-public:
-    void prepare(int len) { len_ = std::max(1, len); buf_.assign(len_, 0.0); p_ = 0; }
-    void reset() { std::fill(buf_.begin(), buf_.end(), 0.0); p_ = 0; }
-    inline double run(double x) { const double y = buf_[p_]; buf_[p_] = x; p_ = (p_ + 1) % len_; return y; }
-
-private:
-    std::vector<double> buf_;
-    int len_ = 1, p_ = 0;
-};
-
 // ----------------------------------------------------------------------------- saturazioni
 
 /** Saturazione morbida simmetrica con guadagno 1 per i segnali piccoli. */
 inline double softSat(double x, double drive) { return drive <= 1e-6 ? x : std::tanh(drive * x) / drive; }
-
-/**
- * Saturazione "a valvola": curva asimmetrica (polarizzazione) che produce soprattutto la 2a
- * armonica. Guadagno 1 e uscita 0 per i segnali piccoli (nessuno spostamento in continua).
- */
-inline double tubeSat(double x, double drive, double bias) {
-    if (drive <= 1e-6) return x;
-    const double t0 = std::tanh(bias), slope = 1.0 - t0 * t0;
-    return (std::tanh(drive * x + bias) - t0) / (drive * slope);
-}
 
 // ----------------------------------------------------------------------------- divisione in bande
 
@@ -141,7 +50,7 @@ struct BandSplit {
     inline double low(double x) { return s2.run(lp, s1.run(lp, x)); }
 };
 
-// ----------------------------------------------------------------------------- moduli "di colore"
+// ----------------------------------------------------------------------------- moduli
 
 /**
  * Analog Bass - parte non lineare: la banda sotto ~70 Hz passa da una saturazione morbida
@@ -176,89 +85,6 @@ private:
     bool on_ = false;
     Smoothed drive_;
     std::vector<BandSplit> split_;
-};
-
-/** Tube Warmth - parte non lineare: saturazione asimmetrica sovracampionata, miscelata. */
-class TubeStage {
-public:
-    void prepare(double fs, int ch) {
-        ch_ = ch;
-        os_.assign(ch, Oversampler2x{});
-        dry_.assign(ch, Delay{});
-        for (auto& d : dry_) d.prepare(Oversampler2x::kLatency);
-        mix_.setRate(fs);
-    }
-    void reset() { for (auto& o : os_) o.reset(); for (auto& d : dry_) d.reset(); }
-    void set(bool on, double intensity) { on_ = on; mix_.target = on ? intensity : 0.0; }
-    bool active() const { return on_ || mix_.cur > 1e-6; }
-    /** Latenza introdotta quando il modulo e' attivo. */
-    int latency() const { return active() ? Oversampler2x::kLatency : 0; }
-    void process(double* w, int frames) {
-        if (!active()) return;
-        for (int f = 0; f < frames; f++) {
-            const double m = mix_.next(), d = 1.0 + 2.5 * m;
-            for (int c = 0; c < ch_; c++) {
-                double& x = w[static_cast<size_t>(f) * ch_ + c];
-                double a, b;
-                os_[c].up(x, a, b);
-                const double wet = os_[c].down(tubeSat(a, d, 0.35), tubeSat(b, d, 0.35));
-                x = dry_[c].run(x) * (1.0 - m) + wet * m;
-            }
-        }
-    }
-
-private:
-    int ch_ = 2;
-    bool on_ = false;
-    Smoothed mix_;
-    std::vector<Oversampler2x> os_;
-    std::vector<Delay> dry_;
-};
-
-/**
- * Harmonic Exciter: estrae la parte alta (sopra ~3 kHz), la satura per generare armoniche,
- * ne tiene solo la parte alta e la aggiunge in piccola quantita' (presenza e brillantezza).
- */
-class Exciter {
-public:
-    void prepare(double fs, int ch) {
-        fs_ = fs; ch_ = ch;
-        st_.assign(static_cast<size_t>(ch) * 4, BiquadState{});
-        hp_ = design::highPass(fs, 3000.0, 0.7071);
-        hp2_ = design::highPass(fs, 5000.0, 0.7071);
-        os_.assign(ch, Oversampler2x{});
-        amt_.setRate(fs);
-    }
-    void reset() { for (auto& s : st_) s.reset(); for (auto& o : os_) o.reset(); }
-    void set(bool on, double amount) { on_ = on; amt_.target = on ? amount : 0.0; }
-    bool active() const { return on_ || amt_.cur > 1e-6; }
-    void process(double* w, int frames) {
-        if (!active()) return;
-        for (int f = 0; f < frames; f++) {
-            const double a = amt_.next() * 0.35;
-            for (int c = 0; c < ch_; c++) {
-                double& x = w[static_cast<size_t>(f) * ch_ + c];
-                BiquadState* s = &st_[static_cast<size_t>(c) * 4];
-                const double hi = s[1].run(hp_, s[0].run(hp_, x));
-                // generazione a frequenza doppia: le armoniche oltre Nyquist non ritornano come aliasing
-                double u0, u1;
-                os_[c].up(hi, u0, u1);
-                auto gen = [](double v) { return softSat(2.0 * std::fabs(v) * v + v, 2.0) - v; };  // solo la parte generata
-                const double g = os_[c].down(gen(u0), gen(u1));
-                const double air = s[3].run(hp2_, s[2].run(hp2_, g));
-                x += a * air;
-            }
-        }
-    }
-
-private:
-    double fs_ = 48000;
-    int ch_ = 2;
-    bool on_ = false;
-    Smoothed amt_;
-    Coef hp_, hp2_;
-    std::vector<BiquadState> st_;
-    std::vector<Oversampler2x> os_;
 };
 
 /**
@@ -307,45 +133,6 @@ private:
     double fast_ = 0, slow_ = 0, g_ = 1, amount_ = 0, maxDb_ = 4;
     int ch_ = 2, mode_ = 0;
     std::vector<BandSplit> split_;
-};
-
-/**
- * Mobile Bass (solo altoparlante del telefono): l'altoparlante non riproduce i bassi profondi,
- * quindi si generano le loro armoniche (100-400 Hz) che l'orecchio interpreta come la
- * fondamentale mancante ("basso virtuale").
- */
-class VirtualBass {
-public:
-    void prepare(double fs, int ch) {
-        ch_ = ch;
-        st_.assign(static_cast<size_t>(ch) * 4, BiquadState{});
-        bp_ = design::bandPass(fs, 90.0, 0.8);
-        hp_ = design::bandPass(fs, 220.0, 0.7);
-        amt_.setRate(fs);
-    }
-    void reset() { for (auto& s : st_) s.reset(); }
-    void set(bool on, double amount) { on_ = on; amt_.target = on ? amount : 0.0; }
-    bool active() const { return on_ || amt_.cur > 1e-6; }
-    void process(double* w, int frames) {
-        if (!active()) return;
-        for (int f = 0; f < frames; f++) {
-            const double a = amt_.next() * 2.5;
-            for (int c = 0; c < ch_; c++) {
-                double& x = w[static_cast<size_t>(f) * ch_ + c];
-                BiquadState* s = &st_[static_cast<size_t>(c) * 4];
-                const double lo = s[1].run(bp_, s[0].run(bp_, x));
-                const double harm = softSat(lo * 3.0, 3.0) / 3.0 + 0.8 * std::fabs(lo);  // dispari + pari
-                x += a * s[3].run(hp_, s[2].run(hp_, harm));
-            }
-        }
-    }
-
-private:
-    int ch_ = 2;
-    bool on_ = false;
-    Smoothed amt_;
-    Coef bp_, hp_;
-    std::vector<BiquadState> st_;
 };
 
 // ----------------------------------------------------------------------------- immagine stereo
@@ -414,68 +201,6 @@ private:
     Smoothed lg_, rg_, wid_, hiW_, xf_;
     Coef xLp_;
     BiquadState xs_[1];
-};
-
-// ----------------------------------------------------------------------------- dinamica
-
-/**
- * Compressore/espansore feed-forward a canali collegati: rilevatore di potenza a 8 ms (calibrato
- * sul picco di un seno), curva statica con ginocchio morbido, attacco e rilascio sulla riduzione
- * in dB. Con [expander] la curva agisce SOTTO la soglia (espansione verso il basso).
- */
-class Dynamics {
-public:
-    void prepare(double fs, int ch) { fs_ = fs; ch_ = ch; det_ = onePole(fs, 8.0); setTimes(atkMs_, relMs_); reset(); }
-    void reset() { pow_ = 0; gr_ = 0; minGr_ = 0; }
-    void set(bool on, bool expander, double thr, double ratio, double atkMs, double relMs, double kneeDb, double makeupDb) {
-        on_ = on; exp_ = expander;
-        thr_ = std::min(0.0, std::max(-80.0, thr));
-        ratio_ = std::min(20.0, std::max(1.0, ratio));
-        knee_ = std::min(24.0, std::max(0.0, kneeDb));
-        makeup_ = dbToLin(std::min(24.0, std::max(0.0, makeupDb)));
-        setTimes(std::min(100.0, std::max(0.5, atkMs)), std::min(2000.0, std::max(20.0, relMs)));
-    }
-    bool active() const { return on_ || gr_ < -1e-6; }
-    double minGainDb() const { return minGr_; }
-    void resetMeter() { minGr_ = 0; }
-
-    inline double staticGainDb(double xDb) const {
-        const double over = xDb - thr_, T = thr_, R = ratio_, W = knee_;
-        double y;
-        if (!exp_) {
-            if (2 * over < -W) y = xDb;
-            else if (W > 0 && 2 * std::fabs(over) <= W) { const double k = over + W / 2; y = xDb + (1 / R - 1) * k * k / (2 * W); }
-            else y = T + over / R;
-        } else {
-            if (2 * over > W) y = xDb;
-            else if (W > 0 && 2 * std::fabs(over) <= W) { const double k = over - W / 2; y = xDb + (R - 1) * k * k / (2 * W); }
-            else y = T + over * R;
-        }
-        return std::max(-60.0, y - xDb);
-    }
-
-    void process(double* w, int frames) {
-        if (!active()) return;
-        for (int f = 0; f < frames; f++) {
-            double* fr = w + static_cast<size_t>(f) * ch_;
-            double p = 0;
-            for (int c = 0; c < ch_; c++) p = std::max(p, fr[c] * fr[c]);
-            pow_ += det_ * (p - pow_);
-            const double xDb = pow_ > 1e-14 ? 10.0 * std::log10(2.0 * pow_) : -140.0;
-            const double target = on_ ? staticGainDb(xDb) : 0.0;
-            gr_ += (target < gr_ ? atk_ : rel_) * (target - gr_);
-            if (gr_ < minGr_) minGr_ = gr_;
-            const double g = dbToLin(gr_) * (on_ ? makeup_ : 1.0);
-            for (int c = 0; c < ch_; c++) fr[c] *= g;
-        }
-    }
-
-private:
-    void setTimes(double a, double r) { atkMs_ = a; relMs_ = r; atk_ = onePole(fs_, a); rel_ = onePole(fs_, r); }
-    double fs_ = 48000, det_ = 0.01, atk_ = 0.01, rel_ = 0.001, atkMs_ = 10, relMs_ = 150;
-    double thr_ = -18, ratio_ = 3, knee_ = 6, makeup_ = 1, pow_ = 0, gr_ = 0, minGr_ = 0;
-    int ch_ = 2;
-    bool on_ = false, exp_ = false;
 };
 
 /**

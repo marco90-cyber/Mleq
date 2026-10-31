@@ -1,9 +1,11 @@
 MLEqualizer - avvisi di terze parti
 
 Tutto il codice del motore DSP (app/src/main/cpp/dsp_*.h) e dell'app e' scritto per questo progetto.
-Le funzioni dei moduli (Analog Bass, Tube Warmth, Hi-Res Air, HDR Dynamics, Surround+, DBFB, Mobile Bass,
-Harmonic Exciter) si ispirano a quelle descritte da altre app, ma nessun codice di quelle app e' stato
-copiato o tradotto.
+Ispirazioni (nessun codice copiato o tradotto):
+  - Poweramp: toni con frequenza e Q, formato dei preset JSON
+  - JadOO DSP: idea dei moduli Analog Bass, Hi-Res Air, Surround+, DBFB e Loudness
+  - Mornye: grafica Material You a schede
+  - AutoEQ: formato testo dei preset
 
 Tryptify (https://github.com/tryptz/Tryptify) - GPL-3.0
   L'algoritmo del limiter look-ahead in app/src/main/cpp/dsp_modules.h (massimo mobile con deque
@@ -12,6 +14,11 @@ Tryptify (https://github.com/tryptz/Tryptify) - GPL-3.0
   a 64 bit, rilevatore true-peak, tenuta sui bassi, garanzia di soglia.
 
 Audio EQ Cookbook, Robert Bristow-Johnson - formule dei filtri biquad (nessun codice incluso).
+
+Martin Vicanek, "Matched Second Order Digital Filters" (2016) - metodo dei filtri "matched"
+(nessun codice incluso).
+
+AndroidX Media3 / ExoPlayer, Jetpack Compose, Material 3 - Apache License 2.0 (dipendenze Gradle).
 
 ITU-R BS.1770-4 / EBU R128 - definizione della misura di loudness (coefficienti pubblici della norma).
 

@@ -131,9 +131,8 @@ class AudioEngine(
                 if (cfg.replayGain != ReplayGain.OFF) planScans()
             }
         }
-        // Mobile Bass agisce solo sull'altoparlante; la loudness segue il volume del telefono
-        eqProcessor.speaker = outputMonitor.kind == OutKind.Speaker
-        outputMonitor.onKindChanged = { k -> eqProcessor.speaker = k == OutKind.Speaker }
+        // la loudness segue il volume del telefono (anche quando cambia l'uscita)
+        outputMonitor.onKindChanged = { updateListenVolume() }
         updateListenVolume()
         app.contentResolver.registerContentObserver(
             android.provider.Settings.System.CONTENT_URI, true,

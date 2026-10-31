@@ -220,50 +220,9 @@ static void testLimiter() {
     CHECK(thd < 0.02, MSG("limiter: 40 Hz +6 dB oltre soglia, THD+N %.3f%%", thd));
 }
 
-static void testCompressorAndHdr() {
-    double g = gainDbAt(ON + "comp=1;comp.thr=-18;comp.ratio=4;comp.knee=0", 1000, -6);
-    CHECK(std::fabs(g + 9) < 0.15, MSG("compressore: -6 dB, soglia -18, 4:1 -> %.2f dB (atteso -9)", g));
-    g = gainDbAt(ON + "comp=1;comp.thr=-18;comp.ratio=4", 1000, -30);
-    CHECK(std::fabs(g) < 0.05, MSG("compressore: sotto soglia %.3f dB", g));
-    g = gainDbAt(ON + "comp=1;comp.thr=-30;comp.ratio=4;comp.knee=0;comp.makeup=6", 1000, -40);
-    CHECK(std::fabs(g - 6) < 0.05, MSG("compressore: recupero +6 dB -> %.2f", g));
-    // HDR Restoration: espansione 1,12:1 sotto -38 dBFS (misurata a 1 kHz, dove l'aria non agisce)
-    g = gainDbAt(ON + "hdr=2", 1000, -60);
-    const double exp = (-60.0 + 38.0) * 0.12;
-    CHECK(std::fabs(g - exp) < 0.3, MSG("HDR Restoration: -60 dBFS -> %.2f dB (atteso %.2f)", g, exp));
-    g = gainDbAt(ON + "hdr=2", 1000, -10);
-    CHECK(std::fabs(g) < 0.05, MSG("HDR Restoration: sopra soglia invariato (%.3f dB)", g));
-}
-
-static void testTube() {
-    const int sr = 44100;
-    // segnale piccolo: livello invariato a 1 kHz
-    double g = gainDbAt(ON + "tube=1;tube.amount=0.6", 1000, -50, sr);
-    CHECK(std::fabs(g) < 0.15, MSG("Tube: segnale piccolo invariato a 1 kHz (%.3f dB)", g));
-    // segnale forte: soprattutto 2a armonica
-    Engine e; e.configure(sr, 2); e.setParams((ON + "tube=1;tube.amount=0.6").c_str());
-    auto x = sine(sr, 2, 1000, 0.5, sr * 2);
-    runE(e, x, 2);
-    const double h1 = amplitude(x, 2, 0, sr, 1000, sr), h2 = amplitude(x, 2, 0, sr, 2000, sr), h3 = amplitude(x, 2, 0, sr, 3000, sr);
-    CHECK(h2 > h3 && h2 / h1 > 0.003 && h2 / h1 < 0.1, MSG("Tube: 2a armonica %.1f dB, 3a %.1f dB (calore 'pari')", 20 * std::log10(h2 / h1), 20 * std::log10(h3 / h1)));
-    // aliasing: un seno a 15 kHz non deve generare componenti non armoniche (alias a 14,1 kHz)
-    Engine a; a.configure(sr, 2); a.setParams((ON + "tube=1;tube.amount=1").c_str());
-    auto y = sine(sr, 2, 15000, 0.7, sr * 2);
-    runE(a, y, 2);
-    const double f1 = amplitude(y, 2, 0, sr, 15000, sr), al = amplitude(y, 2, 0, sr, 14100, sr);
-    CHECK(20 * std::log10(al / f1) < -60, MSG("Tube: alias a 14,1 kHz %.1f dB sotto (sovracampionamento x2)", 20 * std::log10(al / f1 + 1e-12)));
-}
-
-static void testExciterAndAir() {
+static void testAir() {
     const int sr = 48000;
-    double g = gainDbAt(ON + "exciter=1;exciter.amount=1", 200, -10, sr);
-    CHECK(std::fabs(g) < 0.05, MSG("Exciter: 200 Hz invariato (%.3f dB)", g));
-    Engine e; e.configure(sr, 2); e.setParams((ON + "exciter=1;exciter.amount=1").c_str());
-    auto x = sine(sr, 2, 4000, 0.5, sr * 2);
-    runE(e, x, 2);
-    const double h1 = amplitude(x, 2, 0, sr, 4000, sr), h2 = amplitude(x, 2, 0, sr, 8000, sr), h3 = amplitude(x, 2, 0, sr, 12000, sr);
-    CHECK(std::max(h2, h3) / h1 > 0.003, MSG("Exciter: armoniche alte aggiunte a 4 kHz (2a %.1f dB, 3a %.1f dB)", 20 * std::log10(h2 / h1), 20 * std::log10(h3 / h1)));
-    g = gainDbAt(ON + "air=1;air.amount=1", 16000, -20, sr);
+    double g = gainDbAt(ON + "air=1;air.amount=1", 16000, -20, sr);
     CHECK(g > 3.5 && g < 5.5, MSG("Hi-Res Air: +%.2f dB a 16 kHz", g));
     g = gainDbAt(ON + "air=1;air.amount=1", 500, -20, sr);
     CHECK(std::fabs(g) < 0.1, MSG("Hi-Res Air: 500 Hz invariato (%.3f dB)", g));
@@ -309,14 +268,14 @@ static void testStereo() {
         for (int i = 0; i < n; i++) { x[2 * i] = static_cast<float>(0.4 * std::sin(2 * kPi * 1000 * i / sr)); x[2 * i + 1] = static_cast<float>(0.2 * std::sin(2 * kPi * 5000 * i / sr)); }
         return x;
     };
-    { Engine e; e.configure(sr, 2); e.setParams((ON + "mono=1").c_str()); auto x = stereoIn(); runE(e, x, 2);
+    { Engine e; e.configure(sr, 2); e.setParams((ON + "stereo=1;" + "mono=1").c_str()); auto x = stereoIn(); runE(e, x, 2);
       double d = 0; for (int i = n / 2; i < n; i++) d = std::max(d, (double)std::fabs(x[2 * i] - x[2 * i + 1]));
       CHECK(d < 1e-6, "Stereo: mono = canali identici"); }
-    { Engine e; e.configure(sr, 2); e.setParams((ON + "balance=1").c_str()); auto x = stereoIn(), r = x; runE(e, x, 2);
+    { Engine e; e.configure(sr, 2); e.setParams((ON + "stereo=1;" + "balance=1").c_str()); auto x = stereoIn(), r = x; runE(e, x, 2);
       double l = 0, dr = 0; for (int i = n / 2; i < n; i++) { l = std::max(l, (double)std::fabs(x[2 * i])); dr = std::max(dr, (double)std::fabs(x[2 * i + 1] - r[2 * i + 1])); }
       CHECK(l < 1e-4 && dr < 1e-4, "Stereo: bilanciamento tutto a destra"); }
     // espansione e Surround: il contenuto al centro (voce, mono) resta identico
-    for (const char* p : {"expand=1", "surround=1", "surround=3"}) {
+    for (const char* p : {"stereo=1;expand=1", "surround=1", "surround=3"}) {
         Engine e; e.configure(sr, 2); e.setParams((ON + p).c_str());
         auto x = sine(sr, 2, 1000, 0.3, n); runE(e, x, 2);
         double d = 0; for (int i = n / 2; i < n; i++) d = std::max(d, (double)std::fabs(x[2 * i] - x[2 * i + 1]));
@@ -331,19 +290,19 @@ static void testStereo() {
         runE(e, x, 2);
         return 20 * std::log10(amplitude(x, 2, 0, sr, f, n / 2) / 0.2);
     };
-    const double hi = side("expand=1", 5000), low = side("expand=1", 40);
+    const double hi = side("stereo=1;expand=1", 5000), low = side("stereo=1;expand=1", 40);
     CHECK(std::fabs(hi - 6.02) < 0.15 && low < 1.5, MSG("Stereo: espansione 100%% = +%.2f dB sul laterale a 5 kHz, +%.2f a 40 Hz", hi, low));
     const double ultra = side("surround=3", 10000);
     CHECK(ultra > 4.0, MSG("Surround Ultra Wide: laterale a 10 kHz +%.1f dB (immagine piu' ampia)", ultra));
     // crossfeed: il mono resta piatto, la separazione ai bassi si riduce
     double worst = 0;
     for (double f : {100.0, 1000.0, 3000.0, 10000.0}) {
-        Engine e; e.configure(sr, 2); e.setParams((ON + "crossfeed=1").c_str());
+        Engine e; e.configure(sr, 2); e.setParams((ON + "stereo=1;" + "crossfeed=1").c_str());
         auto x = sine(sr, 2, f, 0.3, n); runE(e, x, 2);
         worst = std::max(worst, std::fabs(20 * std::log10(amplitude(x, 2, 0, sr, f, n / 2) / 0.3)));
     }
     CHECK(worst < 1.0, MSG("Crossfeed: contenuto mono piatto entro %.2f dB", worst));
-    Engine e; e.configure(sr, 2); e.setParams((ON + "crossfeed=1").c_str());
+    Engine e; e.configure(sr, 2); e.setParams((ON + "stereo=1;" + "crossfeed=1").c_str());
     std::vector<float> x(static_cast<size_t>(n) * 2);
     for (int i = 0; i < n; i++) x[2 * i] = static_cast<float>(0.3 * std::sin(2 * kPi * 200 * i / sr));
     runE(e, x, 2);
@@ -351,16 +310,8 @@ static void testStereo() {
     CHECK(leak > -8 && leak < -2, MSG("Crossfeed: un suono solo a sinistra arriva a destra a %.1f dB (200 Hz)", leak));
 }
 
-static void testMobileAndLoudness() {
+static void testLoudnessContour() {
     const int sr = 48000;
-    const double off = gainDbAt(ON + "mbass=1;mbass.amount=1;speaker=0", 50, -20, sr);
-    CHECK(std::fabs(off) < 0.01, MSG("Mobile Bass: spento in cuffia (%.3f dB)", off));
-    const double hp = gainDbAt(ON + "mbass=1;mbass.amount=1;speaker=1", 40, -20, sr);
-    CHECK(hp < -6, MSG("Mobile Bass sull'altoparlante: 40 Hz attenuati (%.1f dB, protezione)", hp));
-    Engine e; e.configure(sr, 2); e.setParams((ON + "mbass=1;mbass.amount=1;speaker=1").c_str());
-    auto x = sine(sr, 2, 70, 0.4, sr * 2); runE(e, x, 2);
-    const double h1 = amplitude(x, 2, 0, sr, 70, sr), h2 = amplitude(x, 2, 0, sr, 140, sr), h3 = amplitude(x, 2, 0, sr, 210, sr);
-    CHECK(std::max(h2, h3) > h1 * 0.3, MSG("Mobile Bass: basso virtuale, armoniche di 70 Hz a %.1f dB rispetto alla fondamentale", 20 * std::log10(std::max(h2, h3) / h1)));
     const double l1 = gainDbAt(ON + "loud=1;loud.amount=1;volume=0.25", 40, -20, sr);
     const double l0 = gainDbAt(ON + "loud=1;loud.amount=1;volume=1", 40, -20, sr);
     const double mid = gainDbAt(ON + "loud=1;loud.amount=1;volume=0.25", 1000, -20, sr);
@@ -375,11 +326,11 @@ static void testStability() {
         char b[2048];
         std::snprintf(b, sizeof b,
             "master=1;lim=1;headroom=%d;pre=%g;eq=%d;bass=%g;bass.f=%g;bass.q=%g;treble=%g;treble.f=%g;treble.q=%g;"
-            "abass=1;abass.drive=%g;abass.warmth=%g;tube=1;tube.amount=%g;exciter=1;exciter.amount=%g;air=1;air.amount=%g;"
-            "hdr=%d;surround=%d;balance=%g;expand=%g;crossfeed=%g;dbfb=%d;mbass=1;speaker=1;loud=1;volume=%g;comp=1;comp.ratio=%g;",
+            "abass=1;abass.drive=%g;abass.warmth=%g;air=1;air.amount=%g;"
+            "surround=%d;stereo=1;balance=%g;expand=%g;crossfeed=%g;dbfb=%d;loud=1;volume=%g;",
             int(u(rng) * 2), u(rng) * 24 - 12, int(u(rng) * 3), u(rng) * 30 - 15, 20 + u(rng) * 900, 0.1 + u(rng) * 1.9,
-            u(rng) * 30 - 15, 1000 + u(rng) * 19000, 0.1 + u(rng) * 1.9, u(rng), u(rng), u(rng), u(rng), u(rng),
-            int(u(rng) * 3), int(u(rng) * 4), u(rng) * 2 - 1, u(rng), u(rng), int(u(rng) * 3), u(rng), 1 + u(rng) * 19);
+            u(rng) * 30 - 15, 1000 + u(rng) * 19000, 0.1 + u(rng) * 1.9, u(rng), u(rng), u(rng),
+            int(u(rng) * 4), u(rng) * 2 - 1, u(rng), u(rng), int(u(rng) * 3), u(rng));
         std::string s = b;
         for (int i = 0; i < kParamBands; i++) s += peqBand(i, u(rng) > 0.3, int(u(rng) * 8), 20 + u(rng) * 19980, u(rng) * 30 - 15, 0.1 + u(rng) * 17.9);
         for (int i = 0; i < kGraphicBands; i++) s += "geq." + std::to_string(i) + "=" + std::to_string(u(rng) * 30 - 15) + ";";
@@ -395,11 +346,11 @@ static void testStability() {
 }
 
 static void testFlushAndLatency() {
-    Engine e; e.configure(48000, 2); e.setParams("master=1;lim=1;tube=1");
+    Engine e; e.configure(48000, 2); e.setParams("master=1;lim=1");
     auto x = sine(48000, 2, 1000, 0.5, 4800); runE(e, x, 2);
     std::vector<float> out(48000);
     const int n = e.flush(reinterpret_cast<uint8_t*>(out.data()), kEncFloat, 24000);
-    CHECK(n == e.latencyFrames() && n > 200, MSG("flush: restituisce la latenza (%d frame = limiter + tube)", n));
+    CHECK(n == e.latencyFrames() && n > 200, MSG("flush: restituisce la latenza del limiter (%d frame)", n));
 }
 
 static void testResample() {
@@ -431,7 +382,7 @@ static void testResample() {
 static void benchmark() {
     const int sr = 48000, secs = 20;
     Engine e; e.configure(sr, 2);
-    std::string s = "master=1;lim=1;comp=1;eq=2;bass=6;treble=4;abass=1;tube=1;exciter=1;air=1;hdr=2;surround=1;crossfeed=0.5;dbfb=1;loud=1;volume=0.5;";
+    std::string s = "master=1;lim=1;eq=2;bass=6;treble=4;abass=1;air=1;surround=1;stereo=1;crossfeed=0.5;dbfb=1;loud=1;volume=0.5;";
     for (int i = 0; i < kParamBands; i++) s += peqBand(i, 1, kPeak, 30 * std::pow(1.5, i), 3, 1);
     e.setParams(s.c_str());
     std::mt19937 rng(9); std::normal_distribution<double> nd(0, 0.2);
@@ -493,12 +444,10 @@ int main() {
     testRamp();
     testHeadroom();
     testLimiter();
-    testCompressorAndHdr();
-    testTube();
-    testExciterAndAir();
+    testAir();
     testBass();
     testStereo();
-    testMobileAndLoudness();
+    testLoudnessContour();
     testStability();
     testFlushAndLatency();
     testResample();

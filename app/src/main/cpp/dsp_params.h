@@ -42,19 +42,14 @@ struct Params {
     double trebleDb = 0, trebleFreq = 10000, trebleQ = 0.6;
 
     bool abassOn = false; double abassDrive = 0.4, abassWarmth = 0.5, abassFreq = 60;  // Analog Bass
-    bool tubeOn = false; double tubeAmount = 0.5;                                     // Tube Warmth
-    bool exciterOn = false; double exciterAmount = 0.4;                              // Harmonic Exciter
     bool airOn = false; double airAmount = 0.5;                                       // Hi-Res Air
-    int hdrMode = 0;              // 0 = spento, 1 = Pure, 2 = Restoration
     int surroundMode = 0;         // 0 = spento, 1 = tradizionale, 2 = palco frontale, 3 = ultra wide
+    bool stereoOn = false;        // bilanciamento, espansione, crossfeed e mono
     double balance = 0, expand = 0, crossfeed = 0;
     bool mono = false;
     int dbfbMode = 0;             // 0 = spento, 1 = normale, 2 = alto
-    bool mobileBassOn = false; double mobileBassAmount = 0.6;
-    bool speakerRoute = false;    // uscita sull'altoparlante del telefono
     bool loudnessOn = false; double loudnessAmount = 0.7, volume = 1.0;
 
-    bool compOn = false; double compThr = -18, compRatio = 3, compAtk = 10, compRel = 150, compKnee = 6, compMakeup = 0;
     bool limOn = true; double limThr = -0.5, limRel = 80;
 
     Params() {
@@ -108,32 +103,18 @@ inline void apply(Params& p, const std::string& k, const std::string& v) {
     else if (is("abass.drive")) p.abassDrive = clampd(d, 0, 1);
     else if (is("abass.warmth")) p.abassWarmth = clampd(d, 0, 1);
     else if (is("abass.f")) p.abassFreq = clampd(d, 20, 120);
-    else if (is("tube")) p.tubeOn = b;
-    else if (is("tube.amount")) p.tubeAmount = clampd(d, 0, 1);
-    else if (is("exciter")) p.exciterOn = b;
-    else if (is("exciter.amount")) p.exciterAmount = clampd(d, 0, 1);
     else if (is("air")) p.airOn = b;
     else if (is("air.amount")) p.airAmount = clampd(d, 0, 1);
-    else if (is("hdr")) p.hdrMode = static_cast<int>(clampd(d, 0, 2));
     else if (is("surround")) p.surroundMode = static_cast<int>(clampd(d, 0, 3));
+    else if (is("stereo")) p.stereoOn = b;
     else if (is("balance")) p.balance = clampd(d, -1, 1);
     else if (is("expand")) p.expand = clampd(d, 0, 1);
     else if (is("crossfeed")) p.crossfeed = clampd(d, 0, 1);
     else if (is("mono")) p.mono = b;
     else if (is("dbfb")) p.dbfbMode = static_cast<int>(clampd(d, 0, 2));
-    else if (is("mbass")) p.mobileBassOn = b;
-    else if (is("mbass.amount")) p.mobileBassAmount = clampd(d, 0, 1);
-    else if (is("speaker")) p.speakerRoute = b;
     else if (is("loud")) p.loudnessOn = b;
     else if (is("loud.amount")) p.loudnessAmount = clampd(d, 0, 1);
     else if (is("volume")) p.volume = clampd(d, 0, 1);
-    else if (is("comp")) p.compOn = b;
-    else if (is("comp.thr")) p.compThr = clampd(d, -60, 0);
-    else if (is("comp.ratio")) p.compRatio = clampd(d, 1, 20);
-    else if (is("comp.atk")) p.compAtk = clampd(d, 0.5, 100);
-    else if (is("comp.rel")) p.compRel = clampd(d, 20, 2000);
-    else if (is("comp.knee")) p.compKnee = clampd(d, 0, 24);
-    else if (is("comp.makeup")) p.compMakeup = clampd(d, 0, 24);
     else if (is("lim")) p.limOn = b;
     else if (is("lim.thr")) p.limThr = clampd(d, -12, 0);
     else if (is("lim.rel")) p.limRel = clampd(d, 5, 1000);

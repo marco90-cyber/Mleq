@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -129,6 +130,7 @@ fun MainScreen(env: AppEnv) {
                     item(if (settings.dynamicColors) "Colori dinamici: attivi" else "Colori dinamici: spenti") { settings.dynamicColors = !settings.dynamicColors }
                     item(if (settings.amoled) "Sfondo nero (AMOLED): sì" else "Sfondo nero (AMOLED): no") { settings.amoled = !settings.amoled }
                     item("Log di debug") { env.overlay = Overlay.Log }
+                    item("Informazioni e crediti") { env.overlay = Overlay.About }
                 }
             }
         }
@@ -139,28 +141,33 @@ fun MainScreen(env: AppEnv) {
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { CurveCard(env, s) }
-            item {
-                EqCard(
-                    env, s,
-                    onSave = { saveDialog = true },
-                    onImport = { importPreset.launch(arrayOf("text/*", "application/json", "*/*")) },
-                    onExport = { exportPart = s.eqPart(); exportPreset.launch("MLEqualizer-preset.txt") },
-                )
+            item(key = "curve") { CurveCard(env, s) }
+            // moduli accesi come schede complete, poi il limiter, poi i moduli spenti raggruppati
+            val mods = modules(s)
+            for (m in mods.filter { it.on }) {
+                item(key = m.key) {
+                    Box(Modifier.animateItem()) {
+                        when (m.key) {
+                            "eq" -> EqCard(
+                                env, s, m,
+                                onSave = { saveDialog = true },
+                                onImport = { importPreset.launch(arrayOf("text/*", "application/json", "*/*")) },
+                                onExport = { exportPart = s.eqPart(); exportPreset.launch("MLEqualizer-preset.txt") },
+                            )
+                            "tone" -> ToneCard(env, s, m)
+                            "abass" -> AnalogBassCard(env, s, m)
+                            "air" -> AirCard(env, s, m)
+                            "stereo" -> StereoCard(env, s, m)
+                            "dbfb" -> DbfbCard(env, s, m)
+                            "loud" -> LoudnessCard(env, s, m)
+                            "rg" -> ReplayGainCard(env, s, m)
+                        }
+                    }
+                }
             }
-            item { ToneCard(env, s) }
-            item { AnalogBassCard(env, s) }
-            item { TubeCard(env, s) }
-            item { ExciterCard(env, s) }
-            item { AirCard(env, s) }
-            item { HdrCard(env, s) }
-            item { StereoCard(env, s) }
-            item { DbfbCard(env, s) }
-            item { MobileBassCard(env, s) }
-            item { LoudnessCard(env, s) }
-            item { CompressorCard(env, s) }
-            item { LimiterCard(env, s) }
-            item { ReplayGainCard(env, s) }
+            item(key = "level") { Box(Modifier.animateItem()) { LimiterCard(env, s) } }
+            val off = mods.filter { !it.on }
+            if (off.isNotEmpty()) item(key = "off") { Box(Modifier.animateItem()) { OffGroup(env, off) } }
         }
     }
 
@@ -218,27 +225,18 @@ private fun statusLine(i: com.marco.mleq.audio.DspInfo): String {
 }
 
 @Composable
-private fun EqCard(env: AppEnv, s: DspSettings, onSave: () -> Unit, onImport: () -> Unit, onExport: () -> Unit) {
+private fun EqCard(env: AppEnv, s: DspSettings, m: ModInfo, onSave: () -> Unit, onImport: () -> Unit, onExport: () -> Unit) {
     val settings = env.settings
-    var lastMode by remember { mutableStateOf(if (s.eqMode == Modes.EQ_OFF) Modes.EQ_GRAPHIC else s.eqMode) }
     ModuleCard(
-        "Equalizzatore",
+        m.title,
         if (s.eqMode == Modes.EQ_PARAMETRIC) "Parametrico · 16 bande, 8 tipi di filtro" else "Grafico · 15 bande ISO",
-        "Grafico: 15 bande alle frequenze ISO da 25 Hz a 16 kHz. Con \"curva fedele\" il motore ricalcola i guadagni " +
-            "perché la curva totale passi esattamente dai cursori (le campane vicine altrimenti si sommano).\n\n" +
-            "Parametrico: 16 bande con frequenza, guadagno e Q liberi e 8 tipi di filtro (campana, shelf, passa-basso, " +
-            "passa-alto, passa-banda, notch, passa-tutto). Si modifica trascinando i punti sul grafico. " +
-            "Accetta i preset AutoEQ e Poweramp.",
-        enabled = s.eqMode != Modes.EQ_OFF,
-        onToggle = { on ->
-            env.feedback.tapScreen()
-            settings.updateDsp { it.copy(eqMode = if (on) lastMode else Modes.EQ_OFF) }
-        },
+        m.info,
+        enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); settings.updateDsp { m.setOn(it, on) } },
     ) {
         Choices(listOf("Grafico", "Parametrico"), if (s.eqMode == Modes.EQ_PARAMETRIC) 1 else 0) { i ->
-            val m = if (i == 1) Modes.EQ_PARAMETRIC else Modes.EQ_GRAPHIC
-            lastMode = m
-            settings.updateDsp { it.copy(eqMode = m) }
+            val mode = if (i == 1) Modes.EQ_PARAMETRIC else Modes.EQ_GRAPHIC
+            settings.updateDsp { it.copy(eqMode = mode) }
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Pill("Apri l'editor", selected = true) {
@@ -289,17 +287,12 @@ internal fun PresetRow(env: AppEnv, s: DspSettings) {
 }
 
 @Composable
-private fun ToneCard(env: AppEnv, s: DspSettings) {
+private fun ToneCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val settings = env.settings
     var dialog by remember { mutableStateOf<Boolean?>(null) }  // true = bassi, false = alti
     ModuleCard(
-        "Toni",
-        "Bassi e alti come Poweramp: shelf con frequenza e Q",
-        "Due filtri a scaffale (shelf), come le manopole di Poweramp. La manopola dà da 0 a +10 dB; la " +
-            "frequenza dice da dove parte il rinforzo e il Q quanto è ripida la salita (0,10 = molto dolce, 0,71 = " +
-            "netta senza risalite, sopra = gradino con una piccola sovraelongazione). Predefiniti: bassi 90 Hz Q 0,80, " +
-            "alti 10 kHz Q 0,60. Con l'headroom automatico il livello scende di quanto rinforzi, così il limiter non interviene.",
-        enabled = null,
+        m.title, m.sub, m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); settings.updateDsp { m.setOn(it, on) } },
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             ToneKnob(env, "Bassi", s.bassDb, s.bassFreq, s.bassQ, Ml.tertiary,
@@ -369,15 +362,11 @@ private fun ToneDialog(env: AppEnv, s: DspSettings, bass: Boolean, onDismiss: ()
 }
 
 @Composable
-private fun AnalogBassCard(env: AppEnv, s: DspSettings) {
+private fun AnalogBassCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val st = env.settings
     ModuleCard(
-        "Analog Bass", "Bassi da console vintage: stile Pultec e saturazione",
-        "Rinforzo a scaffale alla frequenza scelta e, nello stesso momento, un leggero taglio due ottave sopra " +
-            "(il trucco dell'equalizzatore Pultec EQP-1A): il sub-basso si gonfia e la zona \"fangosa\" si pulisce.\n\n" +
-            "Drive: la banda sotto i 70 Hz passa da una saturazione morbida che aggiunge armoniche, così il basso si " +
-            "sente più pieno anche su cuffie piccole. I segnali deboli non cambiano.",
-        enabled = s.analogBass, onToggle = { on -> st.updateDsp { it.copy(analogBass = on, master = it.master || on) } },
+        m.title, m.sub, m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); st.updateDsp { m.setOn(it, on) } },
     ) {
         LabeledSlider("Calore (Pultec)", s.analogWarmth, 0f..1f, String.format(Locale.ITALY, "+%.1f dB", 8f * s.analogWarmth)) { v -> st.updateDsp { it.copy(analogWarmth = v) } }
         LabeledSlider("Drive", s.analogDrive, 0f..1f, fmtPct(s.analogDrive)) { v -> st.updateDsp { it.copy(analogDrive = v) } }
@@ -388,73 +377,25 @@ private fun AnalogBassCard(env: AppEnv, s: DspSettings) {
 }
 
 @Composable
-private fun TubeCard(env: AppEnv, s: DspSettings) {
+private fun AirCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val st = env.settings
     ModuleCard(
-        "Tube Warmth", "Calore da amplificatore a valvole",
-        "Saturazione asimmetrica come una valvola: aggiunge soprattutto la seconda armonica, quella che rende il " +
-            "suono \"caldo\". Lavora a frequenza doppia, così le armoniche non producono rumore metallico (aliasing). " +
-            "In più una leggera \"fioritura\" attorno agli 80 Hz e un dolce arrotondamento sopra i 10 kHz, come il " +
-            "trasformatore d'uscita. Utile su registrazioni digitali sottili o troppo cliniche.",
-        enabled = s.tube, onToggle = { on -> st.updateDsp { it.copy(tube = on, master = it.master || on) } },
-    ) {
-        LabeledSlider("Intensità", s.tubeAmount, 0f..1f, fmtPct(s.tubeAmount)) { v -> st.updateDsp { it.copy(tubeAmount = v) } }
-    }
-}
-
-@Composable
-private fun ExciterCard(env: AppEnv, s: DspSettings) {
-    val st = env.settings
-    ModuleCard(
-        "Harmonic Exciter", "Presenza e brillantezza (stile BBE/Aphex)",
-        "Prende la parte alta del suono (sopra i 3 kHz), ne genera le armoniche e ne aggiunge una piccola quantità " +
-            "sopra i 5 kHz: voci e strumenti diventano più chiari e presenti senza alzare semplicemente gli acuti.",
-        enabled = s.exciter, onToggle = { on -> st.updateDsp { it.copy(exciter = on, master = it.master || on) } },
-    ) {
-        LabeledSlider("Quantità", s.exciterAmount, 0f..1f, fmtPct(s.exciterAmount)) { v -> st.updateDsp { it.copy(exciterAmount = v) } }
-    }
-}
-
-@Composable
-private fun AirCard(env: AppEnv, s: DspSettings) {
-    val st = env.settings
-    ModuleCard(
-        "Hi-Res Air", "Più aria e dettaglio sopra i 6 kHz",
-        "Due shelf morbidi (6 kHz e 12 kHz) che alzano la zona dell'\"aria\": piatti, ambiente, respiro delle voci. " +
-            "Fino a circa +4,5 dB in cima alla gamma; sotto i 2 kHz non cambia nulla.",
-        enabled = s.air, onToggle = { on -> st.updateDsp { it.copy(air = on, master = it.master || on) } },
+        m.title, m.sub, m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); st.updateDsp { m.setOn(it, on) } },
     ) {
         LabeledSlider("Quantità", s.airAmount, 0f..1f, fmtPct(s.airAmount)) { v -> st.updateDsp { it.copy(airAmount = v) } }
     }
 }
 
 @Composable
-private fun HdrCard(env: AppEnv, s: DspSettings) {
+private fun StereoCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val st = env.settings
     ModuleCard(
-        "HDR Dynamics", "Contro la \"guerra del volume\"",
-        "Pure: percorso quasi trasparente, il limiter si alza a -0,1 dBFS e interviene solo sui veri superamenti.\n\n" +
-            "Restoration: per i master schiacciati. Un espansore molto dolce (1,12:1 sotto -38 dBFS) riallarga la " +
-            "differenza tra parti deboli e forti, senza toccare i picchi, più un piccolo recupero d'aria a 10 e 16 kHz.",
-        enabled = null,
+        m.title, m.sub, m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); st.updateDsp { m.setOn(it, on) } },
     ) {
-        Choices(Modes.hdr, s.hdrMode) { i -> st.updateDsp { it.copy(hdrMode = i, master = it.master || i > 0) } }
-    }
-}
-
-@Composable
-private fun StereoCard(env: AppEnv, s: DspSettings) {
-    val st = env.settings
-    ModuleCard(
-        "Surround+ e stereo", "Immagine più ampia con le voci al centro",
-        "Surround+: un \"sorriso\" uguale nelle due orecchie (bassi e acuti, i medi delle voci restano intatti) e un " +
-            "allargamento del solo canale laterale sopra i 2,5 kHz. Le voci e tutto ciò che è al centro non si muovono.\n\n" +
-            "Espansione: allarga il laterale sopra ~150 Hz (i bassi restano al centro). Bilanciamento: abbassa il lato " +
-            "opposto, non alza mai. Crossfeed (cuffie): riduce la separazione dei bassi come ascoltando dei diffusori; " +
-            "il suono al centro non cambia.",
-        enabled = null,
-    ) {
-        Choices(Modes.surround, s.surroundMode) { i -> st.updateDsp { it.copy(surroundMode = i, master = it.master || i > 0) } }
+        Text("Surround+", color = Ml.text, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+        Choices(Modes.surround, s.surroundMode) { i -> st.updateDsp { it.copy(surroundMode = i) } }
         val bal = s.balance
         LabeledSlider("Bilanciamento", bal, -1f..1f, when { kotlin.math.abs(bal) < 0.01f -> "Centro"; bal < 0 -> "S ${(-bal * 100).roundToInt()}%"; else -> "D ${(bal * 100).roundToInt()}%" }) { v ->
             st.updateDsp { it.copy(balance = if (kotlin.math.abs(v) < 0.03f) 0f else v, master = true) }
@@ -469,69 +410,27 @@ private fun StereoCard(env: AppEnv, s: DspSettings) {
 }
 
 @Composable
-private fun DbfbCard(env: AppEnv, s: DspSettings) {
+private fun DbfbCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val st = env.settings
     ModuleCard(
-        "DBFB · bassi dinamici", "Più impatto sui colpi di cassa e basso",
-        "Sotto i 260 Hz confronta il livello istantaneo con quello medio: quando arriva un colpo lo rinforza (fino a " +
-            "+4 dB in Normale, +7 dB in Alto), mentre i suoni costanti restano come sono.",
-        enabled = null,
+        m.title, m.sub, m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); st.updateDsp { m.setOn(it, on) } },
     ) {
-        Choices(Modes.dbfb, s.dbfbMode) { i -> st.updateDsp { it.copy(dbfbMode = i, master = it.master || i > 0) } }
+        Choices(listOf("Normale", "Alto"), (s.dbfbMode - 1).coerceIn(0, 1)) { i -> st.updateDsp { it.copy(dbfbMode = i + 1) } }
     }
 }
 
 @Composable
-private fun MobileBassCard(env: AppEnv, s: DspSettings) {
-    val st = env.settings
-    val onSpeaker = env.engine.outputMonitor.kind == OutKind.Speaker
-    ModuleCard(
-        "Mobile Bass", if (onSpeaker) "Attivo ora: uscita sull'altoparlante" else "In attesa: si attiva solo sull'altoparlante",
-        "L'altoparlante del telefono non riproduce i bassi profondi. Mobile Bass taglia quello che non può " +
-            "riprodurre (meno distorsione) e genera le armoniche dei bassi tra 100 e 400 Hz: l'orecchio ricostruisce la " +
-            "nota mancante (\"basso virtuale\"). Con cuffie, Bluetooth o DAC resta spento da solo.",
-        enabled = s.mobileBass, onToggle = { on -> st.updateDsp { it.copy(mobileBass = on, master = it.master || on) } },
-    ) {
-        LabeledSlider("Intensità", s.mobileBassAmount, 0f..1f, fmtPct(s.mobileBassAmount)) { v -> st.updateDsp { it.copy(mobileBassAmount = v) } }
-    }
-}
-
-@Composable
-private fun LoudnessCard(env: AppEnv, s: DspSettings) {
+private fun LoudnessCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val st = env.settings
     val vol = env.engine.eqProcessor.listenVolume
     val volDb = if (vol > 0) 20 * kotlin.math.log10(vol) else -80.0
     ModuleCard(
-        "Loudness", "Bassi e acuti compensati quando il volume è basso",
-        "A volume basso l'orecchio sente meno bassi e acuti (curve isofoniche). La loudness li compensa in base al " +
-            "volume del telefono: a volume pieno non fa nulla, abbassando aggiunge gradualmente bassi (fino a +12 dB) " +
-            "e acuti (fino a +6 dB).",
-        enabled = s.loudness, onToggle = { on -> st.updateDsp { it.copy(loudness = on, master = it.master || on) } },
+        m.title, m.sub, m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); st.updateDsp { m.setOn(it, on) } },
     ) {
         LabeledSlider("Quantità", s.loudnessAmount, 0f..1f, fmtPct(s.loudnessAmount)) { v -> st.updateDsp { it.copy(loudnessAmount = v) } }
         Text(String.format(Locale.ITALY, "Volume attuale: %.0f dB", volDb), color = Ml.textFaint, fontSize = 12.sp)
-    }
-}
-
-@Composable
-private fun CompressorCard(env: AppEnv, s: DspSettings) {
-    val st = env.settings
-    val red by produceState(0f, s.compressor) {
-        while (s.compressor) { value = env.engine.eqProcessor.meters(false).compressorDb; delay(400) }
-    }
-    ModuleCard(
-        "Compressore", if (s.compressor && red < -0.05f) String.format(Locale.ITALY, "Riduzione fino a %.1f dB", -red) else "Avvicina parti forti e deboli",
-        "Compressore a canali collegati (l'immagine stereo non si sposta), con ginocchio morbido e recupero del livello. " +
-            "Soglia: da dove inizia; rapporto: quanto comprime (4:1 = 4 dB in ingresso diventano 1 dB); attacco e " +
-            "rilascio: quanto velocemente reagisce.",
-        enabled = s.compressor, onToggle = { on -> st.updateDsp { it.copy(compressor = on, master = it.master || on) } },
-    ) {
-        LabeledSlider("Soglia", s.compThresholdDb, -60f..0f, "${s.compThresholdDb.roundToInt()} dB") { v -> st.updateDsp { it.copy(compThresholdDb = v.roundToInt().toFloat()) } }
-        LabeledSlider("Rapporto", s.compRatio, 1f..20f, "${fmt1(s.compRatio)}:1") { v -> st.updateDsp { it.copy(compRatio = (v * 2).roundToInt() / 2f) } }
-        LabeledSlider("Attacco", s.compAttackMs, 0.5f..100f, "${fmt1(s.compAttackMs)} ms") { v -> st.updateDsp { it.copy(compAttackMs = (v * 2).roundToInt() / 2f) } }
-        LabeledSlider("Rilascio", s.compReleaseMs, 20f..1000f, "${s.compReleaseMs.roundToInt()} ms") { v -> st.updateDsp { it.copy(compReleaseMs = ((v / 10).roundToInt() * 10).toFloat()) } }
-        LabeledSlider("Ginocchio", s.compKneeDb, 0f..24f, "${s.compKneeDb.roundToInt()} dB") { v -> st.updateDsp { it.copy(compKneeDb = v.roundToInt().toFloat()) } }
-        LabeledSlider("Recupero", s.compMakeupDb, 0f..24f, "+${fmt1(s.compMakeupDb)} dB") { v -> st.updateDsp { it.copy(compMakeupDb = (v * 2).roundToInt() / 2f) } }
     }
 }
 
@@ -560,22 +459,119 @@ private fun LimiterCard(env: AppEnv, s: DspSettings) {
 }
 
 @Composable
-private fun ReplayGainCard(env: AppEnv, s: DspSettings) {
+private fun ReplayGainCard(env: AppEnv, s: DspSettings, m: ModInfo) {
     val st = env.settings
     val info = env.engine.eqProcessor.info
     val rg = info.replayGainDb
     ModuleCard(
-        "ReplayGain", when {
-            s.replayGain == ReplayGain.OFF -> "Stesso volume per tutti i brani"
+        m.title,
+        when {
             rg == null && env.engine.scanningCurrent -> "Nessun tag: sto misurando il brano…"
             rg == null -> "Nessun valore per il brano attuale"
             else -> String.format(Locale.ITALY, "Brano attuale: %+.1f dB", rg) + if (info.replayGainSource == "analisi") " (misurato)" else " (dai tag)"
         },
-        "Livella i brani in base ai tag ReplayGain del file (FLAC, Ogg, MP3, M4A, Opus). Se il file non ha tag, l'app " +
-            "ne misura la loudness (EBU R128) in background e la ricorda. Il guadagno non porta mai il brano oltre " +
-            "0 dBFS di picco.",
-        enabled = null,
+        m.info, enabled = true,
+        onToggle = { on -> env.feedback.tapScreen(); st.updateDsp { m.setOn(it, on) } },
     ) {
-        Choices(Modes.replayGain, s.replayGain) { i -> st.updateDsp { it.copy(replayGain = i, master = it.master || i > 0) } }
+        Choices(listOf("Brano", "Album"), (s.replayGain - 1).coerceIn(0, 1)) { i -> st.updateDsp { it.copy(replayGain = i + 1) } }
     }
+}
+
+// ------------------------------------------------------------------ registro dei moduli
+
+/** Modulo con interruttore: quando è spento finisce nel gruppo "Moduli spenti". */
+internal class ModInfo(
+    val key: String,
+    val title: String,
+    val sub: String,
+    val info: String,
+    val on: Boolean,
+    val setOn: (DspSettings, Boolean) -> DspSettings,
+)
+
+private fun modules(s: DspSettings): List<ModInfo> = listOf(
+    ModInfo(
+        "eq", "Equalizzatore", "Grafico a 15 bande o parametrico a 16",
+        "Grafico: 15 bande alle frequenze ISO da 25 Hz a 16 kHz. Con \"curva fedele\" il motore ricalcola i guadagni " +
+            "perché la curva totale passi esattamente dai cursori (le campane vicine altrimenti si sommano).\n\n" +
+            "Parametrico: 16 bande con frequenza, guadagno e Q liberi e 8 tipi di filtro (campana, shelf bassi e alti, " +
+            "passa-basso, passa-alto, passa-banda, notch, passa-tutto). Tocca il grafico per aggiungere una banda e " +
+            "trascina i punti per regolarla.\n\nPreset: di fabbrica, salvati da te, importati da AutoEQ o Poweramp. " +
+            "Tieni premuto un tuo preset per eliminarlo.",
+        s.eqMode != Modes.EQ_OFF,
+    ) { d, on -> d.copy(eqMode = if (on) (if (d.eqMode == Modes.EQ_OFF) Modes.EQ_GRAPHIC else d.eqMode) else Modes.EQ_OFF, master = d.master || on) },
+    ModInfo(
+        "tone", "Toni", "Bassi e alti come Poweramp: shelf con frequenza e Q",
+        "Due filtri a scaffale (shelf), come le manopole di Poweramp. La manopola dà da 0 a +10 dB; la frequenza " +
+            "dice da dove parte il rinforzo e il Q quanto è ripida la salita (0,10 = molto dolce, 0,71 = netta senza " +
+            "risalite, 2 = gradino con una piccola sovraelongazione). Predefiniti: bassi 90 Hz Q 0,80, alti 10 kHz Q 0,60. " +
+            "Tocca la frequenza sotto una manopola per cambiarla.\n\nCon l'headroom automatico il livello scende di " +
+            "quanto rinforzi, così il limiter non deve intervenire.",
+        s.tone,
+    ) { d, on -> d.copy(tone = on, master = d.master || on) },
+    ModInfo(
+        "abass", "Analog Bass", "Bassi da console vintage: stile Pultec e saturazione",
+        "Rinforzo a scaffale alla frequenza scelta e, nello stesso momento, un leggero taglio due ottave sopra (il " +
+            "trucco dell'equalizzatore Pultec EQP-1A): il sub-basso si gonfia e la zona \"fangosa\" si pulisce. " +
+            "Calore regola entrambi (fino a +8 / -4 dB).\n\nDrive: la banda sotto i 70 Hz passa da una saturazione " +
+            "morbida che aggiunge armoniche, così il basso si sente più pieno anche su cuffie piccole. I segnali deboli " +
+            "e i medi non cambiano.",
+        s.analogBass,
+    ) { d, on -> d.copy(analogBass = on, master = d.master || on) },
+    ModInfo(
+        "air", "Hi-Res Air", "Più aria e dettaglio sopra i 6 kHz",
+        "Due shelf morbidi (6 kHz e 12 kHz) che alzano la zona dell'\"aria\": piatti, ambiente, respiro delle voci. " +
+            "Fino a circa +4,5 dB in cima alla gamma; sotto i 2 kHz non cambia nulla.",
+        s.air,
+    ) { d, on -> d.copy(air = on, master = d.master || on) },
+    ModInfo(
+        "stereo", "Surround+ e stereo", "Immagine più ampia con le voci al centro",
+        "Surround+: un \"sorriso\" uguale nelle due orecchie (bassi e acuti; i medi delle voci restano intatti) e un " +
+            "allargamento del solo canale laterale sopra i 2,5 kHz. Tradizionale +4 dB, Palco frontale +2,5 dB con più " +
+            "presenza delle voci e nessun allargamento, Ultra Wide +6 dB e allargamento massimo.\n\n" +
+            "Bilanciamento: abbassa il lato opposto, non alza mai. Espansione: allarga il laterale sopra ~150 Hz (i bassi " +
+            "restano al centro). Crossfeed (cuffie): riduce la separazione dei bassi come ascoltando dei diffusori; il " +
+            "suono al centro non cambia. Mono: somma i due canali.",
+        s.stereo,
+    ) { d, on -> d.copy(stereo = on, master = d.master || on) },
+    ModInfo(
+        "dbfb", "DBFB · bassi dinamici", "Più impatto sui colpi di cassa e basso",
+        "Sotto i 260 Hz confronta il livello istantaneo con quello medio: quando arriva un colpo lo rinforza (fino a " +
+            "+4 dB in Normale, +7 dB in Alto), mentre i suoni costanti restano come sono.",
+        s.dbfbMode > 0,
+    ) { d, on -> d.copy(dbfbMode = if (on) maxOf(1, d.dbfbMode) else 0, master = d.master || on) },
+    ModInfo(
+        "loud", "Loudness", "Bassi e acuti compensati quando il volume è basso",
+        "A volume basso l'orecchio sente meno bassi e acuti (curve isofoniche). La loudness li compensa in base al " +
+            "volume del telefono: a volume pieno non fa nulla, abbassando aggiunge gradualmente bassi (fino a +12 dB) " +
+            "e acuti (fino a +6 dB).",
+        s.loudness,
+    ) { d, on -> d.copy(loudness = on, master = d.master || on) },
+    ModInfo(
+        "rg", "ReplayGain", "Stesso volume per tutti i brani",
+        "Livella i brani in base ai tag ReplayGain del file (FLAC, Ogg, MP3, M4A, Opus), per brano o per album. Se il " +
+            "file non ha tag, l'app ne misura la loudness (ITU-R BS.1770 / EBU R128) in background e la ricorda. Il " +
+            "guadagno non porta mai il brano oltre 0 dBFS di picco.",
+        s.replayGain != ReplayGain.OFF,
+    ) { d, on -> d.copy(replayGain = if (on) maxOf(ReplayGain.TRACK, d.replayGain) else ReplayGain.OFF, master = d.master || on) },
+)
+
+/** Moduli spenti, raggruppati in un'unica scheda compatta. */
+@Composable
+private fun OffGroup(env: AppEnv, off: List<ModInfo>) {
+    var info by remember { mutableStateOf<ModInfo?>(null) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Ml.panel).padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 8.dp)) {
+        Text("Moduli spenti", color = Ml.textDim, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        for (m in off) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(m.title, color = Ml.text, fontSize = 15.sp)
+                    Text(m.sub, color = Ml.textFaint, fontSize = 11.sp, maxLines = 1)
+                }
+                IconButton(onClick = { info = m }) { Icon(Icons.Outlined.Info, contentDescription = "Cos'è", tint = Ml.textDim) }
+                MlSwitch(false) { on -> env.feedback.tapScreen(); env.settings.updateDsp { m.setOn(it, on) } }
+            }
+        }
+    }
+    info?.let { m -> InfoDialog(m.title, m.info) { info = null } }
 }

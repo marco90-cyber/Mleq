@@ -29,8 +29,8 @@ data class DspInfo(
     val modules: List<String> = emptyList(),
 )
 
-/** Riduzioni massime di limiter e compressore dall'ultima lettura (dB, <= 0). */
-class Meters(val limiterDb: Float, val compressorDb: Float)
+/** Riduzione massima del limiter dall'ultima lettura (dB, <= 0). */
+class Meters(val limiterDb: Float)
 
 /**
  * Processore audio di Media3 che passa il PCM al motore nativo ([NativeDsp]).
@@ -53,10 +53,6 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
 
     @Volatile var info: DspInfo = DspInfo()
         private set
-
-    /** Uscita sull'altoparlante del telefono (per Mobile Bass). */
-    @Volatile var speaker: Boolean = false
-        set(value) { if (field != value) { field = value; configVersion++ } }
 
     /** Volume di ascolto lineare 0..1 (per la loudness legata al volume). */
     @Volatile var listenVolume: Double = 1.0
@@ -87,7 +83,7 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
 
     fun meters(reset: Boolean = true): Meters {
         val m = dsp.meters(reset)
-        return Meters(m[0].toFloat(), m[1].toFloat())
+        return Meters(m[0].toFloat())
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -145,20 +141,20 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
         val s = pending
         val rgInfo = replayGain ?: scannedGain
         val rgDb = ReplayGain.gainDb(rgInfo, s.replayGain)
-        dsp.setParams(s.toNative(rgDb, speaker, listenVolume))
+        dsp.setParams(s.toNative(rgDb, listenVolume))
         bypass = !s.master
         appliedVersion = v
-        val m = dsp.meters(false)
+        val m = dsp.meters(false)  // [limiter, headroom, ingresso, stadi]
         info = DspInfo(
             active = s.master, sampleRate = sampleRate, channels = channels,
             inEncoding = encName(inEnc), outEncoding = encName(outEnc),
             bypass = bypass, limiter = s.master && s.limiter,
             latencyMs = if (sampleRate > 0) dsp.latencyFrames() * 1000f / sampleRate else 0f,
-            stages = if (s.master) m[4].toInt() else 0,
-            inputGainDb = m[3].toFloat(), headroomDb = m[2].toFloat(),
+            stages = if (s.master) m[3].toInt() else 0,
+            inputGainDb = m[2].toFloat(), headroomDb = m[1].toFloat(),
             replayGainDb = if (s.master && s.replayGain != ReplayGain.OFF && rgInfo != null) rgDb.toFloat() else null,
             replayGainSource = if (rgInfo == null) "" else if (replayGain != null) "tag" else "analisi",
-            modules = if (s.master) activeModules(s, speaker) else emptyList(),
+            modules = if (s.master) activeModules(s) else emptyList(),
         )
         AppLog.d("Audio", "DSP: ${if (bypass) "bypass" else "attivo"}, stadi=${info.stages}, ingresso=${"%.1f".format(info.inputGainDb)} dB")
     }
@@ -238,20 +234,14 @@ class EqAudioProcessor(private val analyzer: Analyzer) : BaseAudioProcessor() {
 
     companion object {
         /** Nomi brevi dei moduli accesi. */
-        fun activeModules(s: DspSettings, speaker: Boolean): List<String> = buildList {
+        fun activeModules(s: DspSettings): List<String> = buildList {
             when (s.eqMode) { Modes.EQ_GRAPHIC -> add("EQ grafico"); Modes.EQ_PARAMETRIC -> add("EQ parametrico") }
-            if (s.bassDb > 0f || s.trebleDb > 0f) add("Toni")
+            if (s.tone && (s.bassDb > 0f || s.trebleDb > 0f)) add("Toni")
             if (s.analogBass) add("Analog Bass")
-            if (s.tube) add("Tube")
-            if (s.exciter) add("Exciter")
             if (s.air) add("Hi-Res Air")
-            if (s.hdrMode > 0) add("HDR")
-            if (s.surroundMode > 0) add("Surround+")
-            if (s.mono || s.balance != 0f || s.expand > 0f || s.crossfeed > 0f) add("Stereo")
+            if (s.stereo) add(if (s.surroundMode > 0) "Surround+" else "Stereo")
             if (s.dbfbMode > 0) add("DBFB")
-            if (s.mobileBass && speaker) add("Mobile Bass")
             if (s.loudness) add("Loudness")
-            if (s.compressor) add("Compressore")
             if (s.limiter) add("Limiter")
         }
     }
